@@ -11,6 +11,30 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-15
+
+Ruleset 1.0.2. Details and sources in [CORRECTIONS.md](CORRECTIONS.md).
+
+### Changed
+- ChaCha20-Poly1305 is no longer compliant under the `civilian` profile: it is quantum-resistant but not
+  a FIPS-approved algorithm. It was already non-compliant under `nss`.
+- SHA-512/256 is judged as its own algorithm (256-bit output) and is no longer counted as CNSA 2.0
+  approved. SHA-512/224 is recognized.
+- HMAC-SHA-1, SHA-1, SHA-224 and SHA-512/224 notes cite the NIST SP 800-131A Rev. 3 draft, which proposes
+  disallowing them for new protection after 2030. Verdicts still follow Rev. 2, the final version.
+- OpenSSH MAC names (`hmac-sha2-256/512[-etm]`, `umac-64/128[-etm]`) and fused cipher names
+  (`aria128-gcm`, `camellia256`) are recognized instead of flagged for review.
+- The public `package.json` no longer installs `@noble/post-quantum`, which nothing in the public tree
+  uses.
+
+### Security
+- `--repo` is passed to cdxgen as an argument, not through a shell. A crafted directory name could
+  previously run a command.
+- `--kube-cli` must be a command name or path, and a node name read from the cluster must be a valid
+  Kubernetes name before it reaches a command line.
+- `--redact` deletes the unredacted intermediate files it leaves behind, and refuses a replacement that
+  would make the CBOM invalid JSON.
+
 ## [0.4.2] - 2026-11-15
 
 ### Added
@@ -63,7 +87,8 @@ First public release.
 - Key-exchange probe image so a FIPS scan host can observe X25519MLKEM768.
 - Pinned, checksum-verified downloads; CI with tests and Gitleaks.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/releases/tag/v0.4.0

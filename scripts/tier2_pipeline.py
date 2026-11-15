@@ -47,7 +47,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "0.4.2"
+TOOLKIT_VERSION = "0.4.3"
 
 
 def run(cmd, timeout=25):
@@ -122,6 +122,12 @@ def capture_context_generic(kube="kubectl"):
 _HOST_RE = re.compile(
     r"^(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
     r"|\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:.]+\])$")
+
+
+# Kubernetes object name (DNS-1123 subdomain).
+_K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$")
+# --kube-cli: a command name or path, nothing a shell would interpret.
+_CLI_RE = re.compile(r"^[A-Za-z0-9_./+-]{1,255}$")
 
 
 def valid_host(host):
@@ -412,7 +418,8 @@ def capture_fips(kube="oc", platform="openshift", debug_image=""):
     Uses `oc debug node` on OpenShift; falls back to `kubectl debug node` (k8s 1.20+) elsewhere.
     """
     node = run(f"{kube} get nodes -o jsonpath='{{.items[0].metadata.name}}'")
-    if not node:
+    # The node name comes from the cluster; only a valid Kubernetes name reaches a command line.
+    if not node or not _K8S_NAME_RE.match(node):
         return "unknown"
     if platform == "openshift":
         v = run(f"{kube} debug node/{node} --to-namespace=default -q -- "
@@ -694,9 +701,16 @@ class CBOM:
 
 def generate_deps_sbom(repo, cdxgen_bin, out):
     """Run cdxgen against a source repo/dir -> CycloneDX dependency SBOM."""
-    cmd = f'{cdxgen_bin} --spec-version 1.6 -o {out} "{repo}"'
+    if not os.path.isdir(repo):
+        sys.stderr.write(f"[warn] --repo {repo!r}: not a directory; skipping the dependency SBOM\n")
+        return False
     sys.stderr.write(f"[deps] cdxgen on {repo} ...\n")
-    run(cmd, timeout=240)
+    # Argument list, no shell: the repo path is passed to cdxgen as data, never interpreted.
+    try:
+        subprocess.run([cdxgen_bin, "--spec-version", "1.6", "-o", out, os.path.abspath(repo)],
+                       capture_output=True, text=True, timeout=240)
+    except Exception as e:
+        sys.stderr.write(f"[warn] cdxgen: {e}\n")
     if os.path.exists(out) and os.path.getsize(out) > 0:
         try:
             with open(out) as f:
@@ -1059,7 +1073,10 @@ def main():
         # record the FIPS posture the scan itself ran under (scan host / in-boundary container)
         ctx["fips"] = read_local_fips()
     else:
-        kube = args.kube_cli
+        if not _CLI_RE.match(args.kube_cli):
+            sys.stderr.write(f"[error] --kube-cli {args.kube_cli!r}: must be a command name or path\n")
+            sys.exit(2)
+        kube = shlex.quote(args.kube_cli)
         platform = detect_platform(kube)
         if platform == "unreachable":
             sys.stderr.write(
@@ -1140,16 +1157,20 @@ def main():
 
     # --- optional dependency SBOM (source components) + merge ---
     inputs = [runtime_tmp]
+    intermediates = [runtime_tmp]   # unredacted working files; removed when --redact is used
     if args.repo:
         deps_tmp = args.out + ".deps.json"
+        intermediates.append(deps_tmp)
         if generate_deps_sbom(args.repo, cdxgen_bin, deps_tmp):
             inputs.append(deps_tmp)
     if args.theia_dir:
         t = args.out + ".theia-dir.json"
+        intermediates.append(t)
         if generate_theia_cbom(theia_bin, "dir", args.theia_dir, cyclonedx_bin, t):
             inputs.append(t)
     if args.theia_image:
         t = args.out + ".theia-image.json"
+        intermediates.append(t)
         if generate_theia_cbom(theia_bin, "image", args.theia_image, cyclonedx_bin, t):
             inputs.append(t)
     # generic external CycloneDX CBOM ingest (e.g. CBOMkit source scan, run out-of-band)
@@ -1158,6 +1179,7 @@ def main():
             sys.stderr.write(f"[warn] --merge-cbom {extra}: not found, skipping\n")
             continue
         conv = f"{args.out}.merge{i}.json"
+        intermediates.append(conv)
         # normalize to 1.6 (external CBOMs may be 1.7); fall back to raw copy if convert can't
         if not convert_bom(cyclonedx_bin, extra, conv):
             shutil.copy(extra, conv)
@@ -1207,7 +1229,19 @@ def main():
             old, new = r.split("=", 1)
             text = text.replace(old, new)
     if args.redact:
-        print(f"[ok] applied {len(args.redact)} redaction(s)")
+        try:
+            json.loads(text)
+        except ValueError as e:
+            sys.stderr.write(f"[error] --redact produced invalid JSON ({e}); nothing written. "
+                             "Avoid quotes and backslashes in replacement strings.\n")
+            sys.exit(2)
+        # The intermediate files hold the unredacted data; remove them.
+        removed = 0
+        for p in intermediates:
+            if os.path.exists(p):
+                os.remove(p)
+                removed += 1
+        print(f"[ok] applied {len(args.redact)} redaction(s); removed {removed} unredacted intermediate file(s)")
     with open(args.out, "w") as f:
         f.write(text)
 

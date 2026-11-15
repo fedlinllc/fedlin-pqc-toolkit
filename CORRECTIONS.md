@@ -182,3 +182,23 @@ Found by running real-world identifiers through `classify()` (now `tests/test_ru
   and the privilege it needs; the SealedSecrets key is marked inferred. `--deep` on non-OpenShift no
   longer defaults to an unpinned `busybox` (`--debug-image` required); the npm fallback for pnpm checks
   the tarball's sha512; the toolkit image runs as an unprivileged user; podman is optional in setup.
+
+## 2026-11-15: ruleset 1.0.2
+
+- **ChaCha20-Poly1305 (civilian):** was compliant; now not compliant. The civilian profile is FIPS-based,
+  and ChaCha20 is not a FIPS 140-3 approved security function (SP 800-140C). It stays quantum-resistant
+  (256-bit key) and does not affect the readiness score. Target: AES-GCM. Matches how ARIA, Camellia,
+  SEED and SM4 were already judged.
+- **SHA-512/256:** was read as SHA-512 and marked CNSA 2.0 approved. It has a 256-bit output (128-bit
+  collision strength); CNSA 2.0 requires SHA-384 or SHA-512. Now its own rule: compliant (civilian), not
+  compliant (nss). SHA-512/224 added (same treatment as SHA-224).
+- **SHA-1 retirement:** NIST SP 800-131A Rev. 3 initial public draft (October 2024; still a draft)
+  proposes, in Table 14, deprecating HMAC generation with SHA-1, SHA-224, SHA-512/224 and SHA3-224 through
+  2030 and disallowing it after 2030, and in Table 12 the same for applying protection with those hashes.
+  Verdicts are unchanged because Rev. 2 is the final text; notes and civilian targets now state the
+  proposed 2030 date. Source key `SP800-131A-R3-IPD` (draft PDF sha256
+  5ffdb907e0e2375901151579422a370b655e131223a2588ea418c5df1dea6e7f, fetched 2026-11-15).
+- **Recognition:** OpenSSH MACs `hmac-sha2-256[-etm]` and `hmac-sha2-512[-etm]` are judged by their hash
+  (as `hmac-sha256` already was); `umac-64/128[-etm]` are UMAC, not FIPS-approved. `aria128-gcm` and
+  `camellia256` resolve to ARIA and Camellia. All were previously "unrecognized, flag for review".
+

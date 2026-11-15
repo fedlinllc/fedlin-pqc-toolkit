@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.1"
+RULESET_VERSION = "1.0.2"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -50,6 +50,11 @@ SOURCES = {
              "AES-256, SHA-384/512)",
     "SP800-57": "NIST SP 800-57 Part 1 Rev. 5, Table 2 (comparable security strengths)",
     "SP800-131A": "NIST SP 800-131A Rev. 2, Transitioning the Use of Cryptographic Algorithms and Key Lengths",
+    "SP800-131A-R3-IPD": "NIST SP 800-131A Rev. 3 initial public draft (Oct 2024; still a draft), Tables 12 and 14: "
+                         "SHA-1 and the 224-bit hashes (incl. in HMAC generation) deprecated through 2030, "
+                         "disallowed after 2030. https://csrc.nist.gov/pubs/sp/800/131/a/r3/ipd",
+    "FIPS140-3": "NIST FIPS 140-3 and SP 800-140C (approved security functions): ChaCha20, Camellia, ARIA, "
+                 "SEED and SM4 are not approved",
     "FIPS186-5": "NIST FIPS 186-5, Digital Signature Standard (DSA no longer approved for signature generation)",
     "RFC8996": "IETF RFC 8996, Deprecating TLS 1.0 and TLS 1.1",
     "RFC7465": "IETF RFC 7465, Prohibiting RC4 Cipher Suites",
@@ -270,10 +275,11 @@ ALGORITHMS = {
     "aes": _a("sym", "block-cipher", _ENC_FN, compliant=_NONE, family="AES", controls=["SC-13", "SC-28"],
               cite=["SP800-131A"], note="AES without a key size. Confirm 128/192/256.",
               target={"civilian": "Confirm key size", "nss": "Confirm key size is AES-256"}),
-    "chacha20": _a("sym", "stream-cipher", _ENC_FN, level=5, strength=256, compliant=_CIV, family="ChaCha20",
-                   standard="non-nist", controls=["SC-13", "SC-28"], cite=["CNSA2"],
-                   note="ChaCha20(-Poly1305), 256-bit key. Quantum-resistant; not a CNSA 2.0 algorithm.",
-                   target={"civilian": "None (256-bit key)", "nss": "AES-256 (CNSA 2.0)"}),
+    "chacha20": _a("sym", "stream-cipher", _ENC_FN, level=5, strength=256, compliant=_NONE, family="ChaCha20",
+                   standard="non-nist", controls=["SC-13", "SC-28"], cite=["FIPS140-3", "CNSA2"],
+                   note="ChaCha20(-Poly1305), 256-bit key. Quantum-resistant, but not a FIPS-approved algorithm "
+                        "and not a CNSA 2.0 algorithm.",
+                   target={"civilian": "AES-GCM (FIPS-approved)", "nss": "AES-256 (CNSA 2.0)"}),
     "camellia": _a("sym", "block-cipher", _ENC_FN, compliant=_NONE, family="Camellia", standard="non-nist",
                    controls=["SC-13", "SC-28"], cite=["SP800-131A"],
                    note="Non-NIST block cipher. Quantum-resistant at 256-bit keys; not FIPS-approved.",
@@ -292,11 +298,26 @@ ALGORITHMS = {
               target={"civilian": "AES (FIPS-approved)", "nss": "AES-256 (CNSA 2.0)"}),
     # --- Hashes -----------------------------------------------------------------------
     "sha-224": _a("hash", "hash", ["digest"], level=1, strength=112, compliant=_CIV, family="SHA-2",
-                  param="224", cite=["SP800-131A", "CNSA2"], note="SHA-224. Approved; CNSA 2.0 requires SHA-384+.",
-                  target={"civilian": "None (approved)", "nss": "SHA-384 or SHA-512 (CNSA 2.0)"}),
+                  param="224", cite=["SP800-131A", "SP800-131A-R3-IPD", "CNSA2"],
+                  note="SHA-224. Approved under SP 800-131A Rev. 2; the Rev. 3 draft proposes disallowing the "
+                       "224-bit hashes for new protection after 2030. CNSA 2.0 requires SHA-384+.",
+                  target={"civilian": "SHA-256 or stronger before 2031 (SP 800-131A Rev. 3 draft)",
+                          "nss": "SHA-384 or SHA-512 (CNSA 2.0)"}),
     "sha-256": _a("hash", "hash", ["digest"], level=2, strength=128, compliant=_CIV, family="SHA-2",
                   param="256", cite=["SP800-131A", "CNSA2"], note="SHA-256. Approved; CNSA 2.0 requires SHA-384+.",
                   target={"civilian": "None (approved)", "nss": "SHA-384 or SHA-512 (CNSA 2.0)"}),
+    "sha-512/224": _a("hash", "hash", ["digest"], level=1, strength=112, compliant=_CIV, family="SHA-2",
+                      param="512/224", cite=["SP800-131A", "SP800-131A-R3-IPD", "CNSA2"],
+                      note="SHA-512/224 (224-bit output). Approved under SP 800-131A Rev. 2; the Rev. 3 draft "
+                           "proposes disallowing the 224-bit hashes for new protection after 2030. CNSA 2.0 "
+                           "requires SHA-384+.",
+                      target={"civilian": "SHA-256 or stronger before 2031 (SP 800-131A Rev. 3 draft)",
+                              "nss": "SHA-384 or SHA-512 (CNSA 2.0)"}),
+    "sha-512/256": _a("hash", "hash", ["digest"], level=2, strength=128, compliant=_CIV, family="SHA-2",
+                      param="512/256", cite=["SP800-131A", "CNSA2"],
+                      note="SHA-512/256 (256-bit output, 128-bit collision strength). Approved; CNSA 2.0 "
+                           "requires SHA-384 or SHA-512.",
+                      target={"civilian": "None (approved)", "nss": "SHA-384 or SHA-512 (CNSA 2.0)"}),
     "sha-384": _a("hash", "hash", ["digest"], level=4, strength=192, compliant=_BOTH, family="SHA-2",
                   param="384", cite=["SP800-131A", "CNSA2"], note="SHA-384. CNSA 2.0 approved.",
                   target={"civilian": "None (approved)", "nss": "None (CNSA 2.0)"}),
@@ -310,11 +331,17 @@ ALGORITHMS = {
                  cite=["SP800-131A"], note="BLAKE2. Not FIPS-approved; not a quantum exposure.",
                  target={"civilian": "SHA-2 or SHA-3 (FIPS-approved)", "nss": "SHA-384 or SHA-512 (CNSA 2.0)"}),
     "hmac-sha1": _a("mac", "mac", ["tag"], compliant=_CIV, family="HMAC", param="SHA-1",
-                    cite=["SP800-131A", "CNSA2"],
-                    note="HMAC-SHA-1 remains acceptable for HMAC under SP 800-131A; SHA-1 collisions do not "
-                         "break HMAC. Migrate opportunistically.",
-                    target={"civilian": "None (acceptable for HMAC; prefer HMAC-SHA-256)",
+                    cite=["SP800-131A", "SP800-131A-R3-IPD", "CNSA2"],
+                    note="HMAC-SHA-1 is acceptable under SP 800-131A Rev. 2 (SHA-1 collisions do not break "
+                         "HMAC). The Rev. 3 draft proposes deprecating HMAC-SHA-1 generation through 2030 and "
+                         "disallowing it after 2030.",
+                    target={"civilian": "HMAC-SHA-256 before 2031 (SP 800-131A Rev. 3 draft)",
                             "nss": "HMAC-SHA-384 (CNSA 2.0)"}),
+    "umac": _a("mac", "mac", ["tag"], compliant=_NONE, family="UMAC", standard="non-nist",
+               cite=["FIPS140-3", "CNSA2"],
+               note="UMAC (RFC 4418, OpenSSH umac-64/umac-128). Not FIPS-approved; not a quantum exposure.",
+               target={"civilian": "HMAC-SHA-256 or HMAC-SHA-512 (FIPS-approved)",
+                       "nss": "HMAC-SHA-384 or HMAC-SHA-512 (CNSA 2.0)"}),
     # --- KDF / password hashing ----------------------------------------------------------
     "pbkdf2": _a("kdf", "kdf", ["keyderive"], compliant=_CIV, family="PBKDF2", cite=["SP800-131A"],
                  note="PBKDF2 (SP 800-132). Symmetric; not a quantum exposure.",
@@ -329,8 +356,9 @@ ALGORITHMS = {
               note="MD5 is broken (collisions)."),
     "md4": _a("broken", "hash", ["digest"], level=0, family="MD4", cite=["SP800-131A"], note="MD4 is broken."),
     "md2": _a("broken", "hash", ["digest"], level=0, family="MD2", cite=["SP800-131A"], note="MD2 is broken."),
-    "sha-1": _a("broken", "hash", ["digest"], level=0, family="SHA-1", cite=["SP800-131A"],
-                note="SHA-1 is disallowed for digital signatures and collision-resistant uses."),
+    "sha-1": _a("broken", "hash", ["digest"], level=0, family="SHA-1", cite=["SP800-131A", "SP800-131A-R3-IPD"],
+                note="SHA-1 is disallowed for digital signatures and collision-resistant uses; the SP 800-131A "
+                     "Rev. 3 draft proposes disallowing it for all new protection after 2030."),
     "des": _a("broken", "block-cipher", _ENC_FN, level=0, family="DES", cite=["SP800-131A"],
               note="DES (56-bit) is broken."),
     "3des": _a("broken", "block-cipher", _ENC_FN, level=0, family="3DES", cite=["SP800-131A"],
@@ -411,11 +439,19 @@ _ALIAS_RAW = {
     # Hashes
     "sha224": "sha-224", "sha-224": "sha-224", "sha256": "sha-256", "sha-256": "sha-256",
     "sha384": "sha-384", "sha-384": "sha-384", "sha512": "sha-512", "sha-512": "sha-512",
-    "sha512/256": "sha-512", "sha-512/256": "sha-512",
+    "sha512/256": "sha-512/256", "sha-512/256": "sha-512/256", "sha512-256": "sha-512/256",
+    "sha-512-256": "sha-512/256", "sha512_256": "sha-512/256",
+    "sha512/224": "sha-512/224", "sha-512/224": "sha-512/224", "sha512-224": "sha-512/224",
+    "sha-512-224": "sha-512/224", "sha512_224": "sha-512/224",
     "sha1": "sha-1", "sha-1": "sha-1", "md5": "md5", "md4": "md4", "md2": "md2",
     "blake2b": "blake2", "blake2s": "blake2", "blake2": "blake2",
     "hmac-sha1": "hmac-sha1", "hmacsha1": "hmac-sha1", "hmac-sha1-96": "hmac-sha1",
     "hmac-sha1-etm@openssh.com": "hmac-sha1",
+    # OpenSSH MAC names; HMAC-SHA-2 is judged by its hash, as hmac-sha256 already is.
+    "hmac-sha2-256": "sha-256", "hmac-sha2-256-etm@openssh.com": "sha-256",
+    "hmac-sha2-512": "sha-512", "hmac-sha2-512-etm@openssh.com": "sha-512",
+    "umac": "umac", "umac-64@openssh.com": "umac", "umac-64-etm@openssh.com": "umac",
+    "umac-128@openssh.com": "umac", "umac-128-etm@openssh.com": "umac",
     # KDF
     "pbkdf2": "pbkdf2", "bcrypt": "password-hash", "scrypt": "password-hash", "argon2": "password-hash",
     "argon2id": "password-hash", "argon2i": "password-hash", "argon2d": "password-hash",
@@ -702,6 +738,11 @@ def normalize(name, bits=None):
         return [("ecdh", CURVES.get(curve) if curve else bits, raw)], bits
     if curve:
         return [("ec", CURVES[curve], raw)], CURVES[curve]
+    # Cipher names with the key size fused on ("camellia256", "aria128-gcm")
+    for t in toks:
+        m = re.match(r"^(camellia|aria)(128|192|256)$", t)
+        if m:
+            return [(m.group(1), None, raw)], None
     # Families by token
     for fam, cid in (("rsa", "rsa"), ("dsa", "dsa"), ("ed25519", "ed25519"), ("ed448", "ed448"),
                      ("x25519", "x25519"), ("x448", "x448"), ("dh", "dh"), ("dhe", "dh"),

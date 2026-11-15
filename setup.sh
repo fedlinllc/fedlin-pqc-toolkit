@@ -45,7 +45,7 @@ elif [ ! -x bin/cbomkit-theia ]; then
 fi
 [ -x bin/cbomkit-theia ] && bin/cbomkit-theia --help >/dev/null && echo "cbomkit-theia: ok"
 
-echo "installing node deps (cdxgen + @noble/post-quantum signer) via pnpm ..."
+echo "installing node deps from pnpm-lock.yaml via pnpm ..."
 # pnpm is pinned in package.json "packageManager" (exact version + sha512). Nothing is installed
 # globally, so setup needs no root. Install strictly from pnpm-lock.yaml; no unfrozen fallback.
 if command -v corepack >/dev/null 2>&1; then

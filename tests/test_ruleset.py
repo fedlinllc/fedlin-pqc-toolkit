@@ -51,7 +51,7 @@ CASES = [
     ("TLS_RSA_WITH_3DES_EDE_CBC_SHA", None, "Critical", "Critical", True, "3des"),
     ("TLS_AES_128_GCM_SHA256", None, "None", "Low", False, "aes-128"),
     ("TLS_AES_256_GCM_SHA384", None, "None", "None", False, "aes-256"),
-    ("TLS_CHACHA20_POLY1305_SHA256", None, "None", "Low", False, "chacha20"),
+    ("TLS_CHACHA20_POLY1305_SHA256", None, "Low", "Low", False, "chacha20"),
     # --- TLS groups ---
     ("X25519MLKEM768", None, "None", "Low", False, "x25519mlkem768"),
     ("SecP256r1MLKEM768", None, "None", "Low", False, "secp256r1mlkem768"),
@@ -74,7 +74,7 @@ CASES = [
     ("ecdh-sha2-nistp384", None, "High", "High", True, "ecdh"),
     ("aes256-gcm@openssh.com", None, "None", "None", False, "aes-256"),
     ("aes128-ctr", None, "None", "Low", False, "aes-128"),
-    ("chacha20-poly1305@openssh.com", None, "None", "Low", False, "chacha20"),
+    ("chacha20-poly1305@openssh.com", None, "Low", "Low", False, "chacha20"),
     ("3des-cbc", None, "Critical", "Critical", True, "3des"),
     # --- certificate signature algorithms ---
     ("sha256WithRSAEncryption", None, "High", "High", True, "rsa"),
@@ -101,13 +101,22 @@ CASES = [
     ("AES-128", None, "None", "Low", False, "aes-128"),
     ("AES", None, "Review", "Review", False, "aes"),
     ("AES-GCM", None, "Review", "Review", False, "aes"),
-    ("CHACHA20-POLY1305", None, "None", "Low", False, "chacha20"),
+    ("CHACHA20-POLY1305", None, "Low", "Low", False, "chacha20"),
     ("SHA-256", None, "None", "Low", False, "sha-256"),
     ("SHA-384", None, "None", "None", False, "sha-384"),
     ("SHA-512", None, "None", "None", False, "sha-512"),
     ("SHA3-256", None, "None", "Low", False, "sha3"),
     ("HMAC-SHA256", None, "None", "Low", False, "sha-256"),
     ("HMAC-SHA1", None, "None", "Low", False, "hmac-sha1"),
+    # ruleset 1.0.2 (2026-11-15)
+    ("SHA-512/256", None, "None", "Low", False, "sha-512/256"),  # 256-bit output: not CNSA 2.0
+    ("sha512/224", None, "None", "Low", False, "sha-512/224"),
+    ("hmac-sha2-256-etm@openssh.com", None, "None", "Low", False, "sha-256"),
+    ("hmac-sha2-512", None, "None", "None", False, "sha-512"),
+    ("umac-64-etm@openssh.com", None, "Low", "Low", False, "umac"),
+    ("umac-128@openssh.com", None, "Low", "Low", False, "umac"),
+    ("aria128-gcm", None, "Low", "Low", False, "aria"),
+    ("camellia256", None, "Low", "Low", False, "camellia"),
     ("PBKDF2", None, "None", "Low", False, "pbkdf2"),  # nss: confirm underlying hash is SHA-384+
     ("rsa-sha2-256", None, "High", "High", True, "rsa"),  # hash size must not be read as key size
     ("bcrypt", None, "Low", "Low", False, "password-hash"),
