@@ -220,3 +220,16 @@ stale or unsourced:
 
 Validation status now comes only from the report's CMVP section (`scripts/cmvp.py`, dated snapshot).
 
+## 2026-11-15: security levels invented by the CBOM merge
+
+- **Was:** when a scan merged other inputs (`--merge-cbom`, `--repo`, `--theia-dir`, `--theia-image`), the
+  final CBOM could carry `classicalSecurityLevel: 0` on algorithms whose classical strength the toolkit does
+  not record (seen on X25519MLKEM768 and ecdsa-with-SHA256), and `nistQuantumSecurityLevel: 0` on the TLS
+  protocol-version asset. These values were not observed: cyclonedx-cli writes 0 for absent integer fields
+  when it merges. In CycloneDX, 0 states no classical security and quantum vulnerability.
+- **Now:** after merging, any security level that the component's original input did not carry is removed.
+  Values the toolkit did record (for example `nistQuantumSecurityLevel: 0` on a quantum-vulnerable key) stay.
+  Endpoint-only scans without merged inputs were not affected. Verdicts and scores were not affected: they
+  come from the ruleset, not from these fields.
+- **Found by:** the PQCMM evidence check of inventory completeness (question 3.2.2), run against a merged CBOM.
+

@@ -11,6 +11,17 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-15
+
+### Fixed
+- CBOMs built with `--merge-cbom`, `--repo`, `--theia-dir` or `--theia-image` could state false security
+  levels. cyclonedx-cli writes `0` for an absent `classicalSecurityLevel` or `nistQuantumSecurityLevel`
+  during merge, so an unknown strength became "0 bits" (for example X25519MLKEM768 and ecdsa-with-SHA256),
+  and a TLS protocol-version asset gained `nistQuantumSecurityLevel: 0`, which CycloneDX reads as
+  quantum-vulnerable. The pipeline now removes any level the original input did not carry. Details in
+  [CORRECTIONS.md](CORRECTIONS.md).
+- `--redact` also removes cbomkit-theia's raw output files.
+
 ## [0.6.0] - 2026-11-15
 
 ### Added
@@ -121,7 +132,8 @@ First public release.
 - Key-exchange probe image so a FIPS scan host can observe X25519MLKEM768.
 - Pinned, checksum-verified downloads; CI with tests and Gitleaks.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.3...v0.5.0

@@ -47,7 +47,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "0.6.0"
+TOOLKIT_VERSION = "0.6.1"
 
 
 def run(cmd, timeout=25):
@@ -966,6 +966,38 @@ def generate_theia_cbom(theia_bin, mode, target, cyclonedx_bin, out):
         return False
 
 
+_LEVEL_KEYS = ("classicalSecurityLevel", "nistQuantumSecurityLevel")
+
+
+def undo_merge_defaults(doc, source_paths):
+    """Remove security levels cyclonedx-cli invents during merge/convert.
+
+    cyclonedx-cli writes 0 for an absent classicalSecurityLevel or nistQuantumSecurityLevel. In CycloneDX
+    0 means "no classical security" / "quantum-vulnerable", so an unknown strength would become a false fact.
+    A level is kept only if the component's original input (before any cyclonedx-cli step) carried it.
+    """
+    orig = {}
+    for path in source_paths:
+        try:
+            with open(path) as f:
+                for c in json.load(f).get("components", []) or []:
+                    ap = ((c.get("cryptoProperties") or {}).get("algorithmProperties") or {})
+                    orig[c.get("bom-ref")] = set(ap)
+        except (OSError, ValueError):
+            continue
+    removed = 0
+    for c in doc.get("components", []) or []:
+        keys = orig.get(c.get("bom-ref"))
+        ap = ((c.get("cryptoProperties") or {}).get("algorithmProperties"))
+        if keys is None or not isinstance(ap, dict):
+            continue
+        for k in _LEVEL_KEYS:
+            if k in ap and k not in keys:
+                del ap[k]
+                removed += 1
+    return removed
+
+
 def merge_boms(cyclonedx_bin, inputs, out):
     r = _cyclonedx(cyclonedx_bin, ["merge", "--input-files", *inputs, "--output-file", out,
                                    "--output-version", "v1_6"])
@@ -1169,19 +1201,23 @@ def main():
     # --- optional dependency SBOM (source components) + merge ---
     inputs = [runtime_tmp]
     intermediates = [runtime_tmp]   # unredacted working files; removed when --redact is used
+    originals = [runtime_tmp]       # inputs as written before any cyclonedx-cli step
     if args.repo:
         deps_tmp = args.out + ".deps.json"
         intermediates.append(deps_tmp)
         if generate_deps_sbom(args.repo, cdxgen_bin, deps_tmp):
             inputs.append(deps_tmp)
+            originals.append(deps_tmp)
     if args.theia_dir:
         t = args.out + ".theia-dir.json"
-        intermediates.append(t)
+        intermediates += [t, t + ".raw.json"]
+        originals.append(t + ".raw.json")
         if generate_theia_cbom(theia_bin, "dir", args.theia_dir, cyclonedx_bin, t):
             inputs.append(t)
     if args.theia_image:
         t = args.out + ".theia-image.json"
-        intermediates.append(t)
+        intermediates += [t, t + ".raw.json"]
+        originals.append(t + ".raw.json")
         if generate_theia_cbom(theia_bin, "image", args.theia_image, cyclonedx_bin, t):
             inputs.append(t)
     # generic external CycloneDX CBOM ingest (e.g. CBOMkit source scan, run out-of-band)
@@ -1191,6 +1227,7 @@ def main():
             continue
         conv = f"{args.out}.merge{i}.json"
         intermediates.append(conv)
+        originals.append(extra)
         # normalize to 1.6 (external CBOMs may be 1.7); fall back to raw copy if convert can't
         if not convert_bom(cyclonedx_bin, extra, conv):
             shutil.copy(extra, conv)
@@ -1214,6 +1251,9 @@ def main():
     # A merge can replace metadata.component and drop metadata.lifecycles; the subject and the stage
     # describe what was scanned, so they always come from the runtime builder.
     final.setdefault("metadata", {})["component"] = doc["metadata"]["component"]
+    n_levels = undo_merge_defaults(final, originals)
+    if n_levels:
+        print(f"[ok] removed {n_levels} security level(s) the CBOM merge invented (absent in the original input)")
     final["metadata"]["lifecycles"] = doc["metadata"]["lifecycles"]
     n_excluded = filter_excluded(final, args.exclude)
     if n_excluded:
