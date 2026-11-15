@@ -172,8 +172,7 @@ if ($tpmPresent) {
         "Replace at next scheduled hardware refresh (2028-2030 lifecycle)."
     )))
     $tpmProps.Add((New-Prop "fedlin:hw_fips_status" (
-        "FIPS 140-2 validated (TPM 2.0 profile); " +
-        "no FIPS 140-3 PQC validation exists for discrete TPMs"
+        "not determined by this collector: check the TPM model's CMVP certificate, if any"
     )))
 
     $components.Add(@{
@@ -236,11 +235,9 @@ if ($hsmFound) {
             (New-Prop "fedlin:hw_pqc_capable"  "unknown")
             (New-Prop "fedlin:hw_action"       "configure")
             (New-Prop "fedlin:hw_action_detail" (
-                "HSM detected ($hsmDisplayName). Verify FIPS 140-3 CMVP validation status " +
-                "for PQC operations (ML-KEM-1024 / ML-DSA-87). " +
-                "Currently validated: Thales TCT Luna T7 (CMVP #5450). " +
-                "Analyst must confirm product version and CMVP certificate number " +
-                "before marking PQC-capable."
+                "HSM detected ($hsmDisplayName). Confirm the model and firmware version, and whether " +
+                "its CMVP certificate approves ML-KEM / ML-DSA, before marking it PQC-capable. " +
+                "Validation status: see the report's FIPS 140-3 (CMVP) section."
             ))
             (New-Prop "fedlin:hw_fips_status"  "analyst verification required -- see action detail")
         )
@@ -256,10 +253,9 @@ if ($hsmFound) {
             (New-Prop "fedlin:hw_pqc_capable"  "false")
             (New-Prop "fedlin:hw_action"       "procure")
             (New-Prop "fedlin:hw_action_detail" (
-                "No HSM detected. PQC key establishment (ML-KEM-1024) requires a " +
-                "FIPS 140-3 CMVP-validated HSM. Currently one product meets this bar: " +
-                "Thales TCT Luna T7 (CMVP cert #5450). Additional products in CMVP " +
-                "pipeline (Entrust nShield 5, Securosys Primus): expected 2027-2028."
+                "No HSM detected. Where keys must be held in hardware, choose an HSM whose CMVP " +
+                "certificate approves ML-KEM / ML-DSA; software modules can also be validated for them. " +
+                "Validation status: see the report's FIPS 140-3 (CMVP) section."
             ))
             (New-Prop "fedlin:hw_pqc_gate"    "true")
             (New-Prop "fedlin:hw_fips_status" "n/a -- no HSM detected")

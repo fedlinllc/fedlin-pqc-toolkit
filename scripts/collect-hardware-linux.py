@@ -76,9 +76,8 @@ def detect_os(hostname):
             f"OpenSSL ML-KEM available ({openssl_ver}). "
             "Configure sshd_config KexAlgorithms to include ml-kem-768 or ml-kem-1024 "
             "and verify TLS 1.3 is enabled on all services. "
-            "Confirm FIPS 140-3 validation status of the OpenSSL provider before "
-            "production use — FIPS-validated PQC requires the OpenSSL 3.5 FIPS provider "
-            "with a current CMVP certificate."
+            "Before relying on it in a FIPS-enforced environment, confirm the active FIPS provider's "
+            "CMVP certificate approves ML-KEM. Validation status: see the report's FIPS 140-3 (CMVP) section."
         )
     else:
         pqc_capable = "false"
@@ -95,38 +94,21 @@ def detect_os(hostname):
 
         if has_ossl35:
             # OpenSSL 3.5 is present — ML-KEM is compiled in but not exposed by the active provider.
-            # Most common cause: FIPS mode + FIPS provider not yet PQC-validated.
+            # Most common cause: FIPS mode with a FIPS provider whose certificate does not approve ML-KEM.
             detail = (
-                f"OpenSSL 3.5 is installed ({openssl_ver}) but ML-KEM is not available in "
-                "the active provider. Most likely cause: FIPS mode with a non-PQC-validated "
-                "FIPS provider. "
-                "The FIPS 140-3 validated PQC OpenSSL provider is expected in 2026–2027. "
-                "Until then, use a FIPS 140-3 validated HSM (Thales TCT Luna T7, CMVP #5450) "
-                "for PQC key establishment in FIPS-enforced environments."
+                f"OpenSSL 3.5+ is installed ({openssl_ver}) but ML-KEM is not available in "
+                "the active provider. Most likely cause: FIPS mode with a FIPS provider that does not "
+                "approve ML-KEM. Options: a FIPS provider whose CMVP certificate approves ML-KEM, or a "
+                "validated HSM that does. Validation status: see the report's FIPS 140-3 (CMVP) section."
             )
         else:
             detail = (
                 f"OpenSSL does not expose ML-KEM ({openssl_ver or 'not found'}). "
-                "PQC SSH and TLS require OpenSSL 3.5+. "
+                "PQC SSH and TLS through OpenSSL require OpenSSL 3.5+. Check which OpenSSL 3.5+ "
+                "packages your distribution release provides, and, in FIPS-enforced environments, "
+                "whether their FIPS provider's certificate approves ML-KEM. Verify with "
+                "'openssl list -kem-algorithms'. Validation status: see the report's FIPS 140-3 (CMVP) section."
             )
-            try:
-                major = int(os_version.split(".")[0]) if os_version else 0
-            except ValueError:
-                major = 0
-            if os_id in ("rhel", "centos", "rocky", "almalinux"):
-                if major >= 10:
-                    detail += "RHEL 10 ships OpenSSL 3.5 as the default provider; verify the openssl35 module is active."
-                elif major == 9:
-                    detail += (
-                        "RHEL 9.6+ provides OpenSSL 3.5 as an opt-in module (not the default FIPS path). "
-                        "Upgrade to RHEL 10 for FIPS-validated PQC as the default provider."
-                    )
-                else:
-                    detail += "RHEL 8 has no PQC path — upgrade to RHEL 9.6+ or RHEL 10."
-            elif os_id in ("ubuntu", "debian"):
-                detail += "Ubuntu 24.10+ and Debian 13 (Trixie) provide OpenSSL 3.5 as an opt-in; Ubuntu 25.04 ships it as default."
-            else:
-                detail += "Install OpenSSL 3.5+ and verify 'openssl list -kem-algorithms' includes ML-KEM-768."
 
     # Check whether AD CS-equivalent (Dogtag, EJBCA) is installed — if so, the OS is a PKI gate
     pki_service = ""
@@ -218,8 +200,7 @@ def detect_tpm(hostname):
             "Replace at next scheduled hardware refresh (2028–2030 lifecycle)."
         )},
         {"name": "fedlin:hw_fips_status", "value": (
-            "FIPS 140-2 validated (TPM 2.0 profile); "
-            "no FIPS 140-3 PQC validation exists for discrete TPMs"
+            "not determined by this collector: check the TPM model's CMVP certificate, if any"
         )},
     ]
     if vendor:
@@ -304,11 +285,9 @@ def detect_hsm(hostname):
                 {"name": "fedlin:hw_pqc_capable",   "value": "unknown"},
                 {"name": "fedlin:hw_action",        "value": "configure"},
                 {"name": "fedlin:hw_action_detail", "value": (
-                    f"HSM detected ({found_name}). Verify FIPS 140-3 CMVP validation status "
-                    "for PQC operations (ML-KEM-1024 / ML-DSA-87). "
-                    "Currently validated: Thales TCT Luna T7 (CMVP #5450). "
-                    "Analyst must confirm product version and CMVP certificate number "
-                    "before marking PQC-capable."
+                    f"HSM detected ({found_name}). Confirm the model and firmware version, and whether "
+                    "its CMVP certificate approves ML-KEM / ML-DSA, before marking it PQC-capable. "
+                    "Validation status: see the report's FIPS 140-3 (CMVP) section."
                 )},
                 {"name": "fedlin:hw_fips_status", "value": "analyst verification required — see action detail"},
             ],
@@ -324,10 +303,9 @@ def detect_hsm(hostname):
                 {"name": "fedlin:hw_pqc_capable",   "value": "false"},
                 {"name": "fedlin:hw_action",        "value": "procure"},
                 {"name": "fedlin:hw_action_detail", "value": (
-                    "No HSM detected. PQC key establishment (ML-KEM-1024) requires a "
-                    "FIPS 140-3 CMVP-validated HSM. Currently one product meets this bar: "
-                    "Thales TCT Luna T7 (CMVP cert #5450). Additional products in CMVP "
-                    "pipeline (Entrust nShield 5, Securosys Primus): expected 2027–2028."
+                    "No HSM detected. Where keys must be held in hardware, choose an HSM whose CMVP "
+                    "certificate approves ML-KEM / ML-DSA; software modules can also be validated for them. "
+                    "Validation status: see the report's FIPS 140-3 (CMVP) section."
                 )},
                 {"name": "fedlin:hw_pqc_gate",   "value": "true"},
                 {"name": "fedlin:hw_fips_status", "value": "n/a — no HSM detected"},

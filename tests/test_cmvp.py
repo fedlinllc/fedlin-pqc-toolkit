@@ -98,6 +98,26 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(summary["cmvp"]["snapshot"], self.snap["fetched"])
 
 
+class CollectorsStateFactsOnly(unittest.TestCase):
+    """Validation status comes from the dated snapshot in the report, never from text baked into a CBOM."""
+
+    def test_no_certificate_numbers_or_forecasts_in_collectors(self):
+        for name in ("collect-hardware-linux.py", "collect-hardware-windows.ps1", "collect-windows.ps1"):
+            with open(os.path.join(ROOT, "scripts", name), encoding="utf-8") as f:
+                text = f.read()
+            self.assertNotRegex(text, r"(?i)CMVP (cert )?#\d{4}", name)
+            self.assertNotRegex(text, r"(?i)expected (in )?20\d\d", name)
+            self.assertNotRegex(text, r"(?i)FIPS 140-2 validated", name)
+
+    def test_powershell_collectors_are_ascii(self):
+        for name in ("collect-hardware-windows.ps1", "collect-windows.ps1"):
+            with open(os.path.join(ROOT, "scripts", name), "rb") as f:
+                data = f.read()
+            if data.startswith(b"\xef\xbb\xbf"):
+                continue  # UTF-8 with BOM is read correctly by Windows PowerShell 5.1
+            self.assertTrue(all(b < 128 for b in data), f"{name}: non-ASCII without a BOM")
+
+
 class Parsers(unittest.TestCase):
     def test_list_row(self):
         page = ('<tr id="cert-row-0"><td><a href="/x/certificate/9" id="cert-number-link-0">9</a></td>'

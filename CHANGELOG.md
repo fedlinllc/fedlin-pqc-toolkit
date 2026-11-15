@@ -11,6 +11,16 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-15
+
+### Fixed
+- The Linux and Windows hardware collectors no longer write validation claims into the CBOM. Removed:
+  a named HSM presented as the only product approved for ML-KEM, a 2026-2027 forecast for a validated PQC
+  OpenSSL provider (one was validated 2026-11-13), a claim that ML-KEM key establishment requires an HSM,
+  unsourced vendor and distribution timelines, and a blanket "FIPS 140-2 validated" status for TPMs. The
+  action text now states what was observed and points to the report's CMVP section, which reads the dated
+  snapshot. Details in [CORRECTIONS.md](CORRECTIONS.md).
+
 ## [0.5.0] - 2026-11-15
 
 ### Added
@@ -101,7 +111,8 @@ First public release.
 - Key-exchange probe image so a FIPS scan host can observe X25519MLKEM768.
 - Pinned, checksum-verified downloads; CI with tests and Gitleaks.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.1...v0.4.2

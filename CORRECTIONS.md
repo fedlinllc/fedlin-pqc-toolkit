@@ -202,3 +202,21 @@ Found by running real-world identifiers through `classify()` (now `tests/test_ru
   (as `hmac-sha256` already was); `umac-64/128[-etm]` are UMAC, not FIPS-approved. `aria128-gcm` and
   `camellia256` resolve to ARIA and Camellia. All were previously "unrecognized, flag for review".
 
+## 2026-11-15: hardware collector validation claims
+
+The collectors' action text is written into the CBOM, which records facts only. Several statements were
+stale or unsourced:
+
+- **"Currently one product meets this bar: Thales TCT Luna T7 (CMVP #5450)"** for ML-KEM key establishment.
+  The CMVP snapshot of 2026-11-15 shows other active certificates approving ML-KEM, including software
+  modules (for example the OpenSSL FIPS Provider, #5586, validated 2026-11-13). Removed.
+- **"The FIPS 140-3 validated PQC OpenSSL provider is expected in 2026-2027."** Superseded by #5586. Removed.
+- **"PQC key establishment (ML-KEM-1024) requires a FIPS 140-3 CMVP-validated HSM."** Software modules can be
+  validated for ML-KEM. Removed.
+- **Vendor and distribution timelines** ("expected 2027-2028", RHEL 10 / Ubuntu default-provider statements)
+  had no cited source. Removed.
+- **TPM "FIPS 140-2 validated (TPM 2.0 profile)".** Validation is per product, and FIPS 140-2 certificates
+  are no longer active. Now "not determined by this collector".
+
+Validation status now comes only from the report's CMVP section (`scripts/cmvp.py`, dated snapshot).
+

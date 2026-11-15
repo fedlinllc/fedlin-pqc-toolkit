@@ -47,7 +47,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "0.5.0"
+TOOLKIT_VERSION = "0.5.1"
 
 
 def run(cmd, timeout=25):
