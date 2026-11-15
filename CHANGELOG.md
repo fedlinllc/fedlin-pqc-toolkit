@@ -11,6 +11,23 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-15
+
+### Added
+- Classical fallback probe: after the key-exchange probe, each TLS endpoint gets a second handshake from a
+  client offering only classical key-exchange groups (TLS 1.2 permitted via the client's default ciphers).
+  The CBOM records the outcome as `fedlin:classicalOnly*` properties on the TLS interface: accepted (the
+  server chose classical parameters), rejected (handshake-failure or insufficient-security alert only),
+  inconclusive (any other failure, or a refused FIPS reduced offer) or untested (no connection). It also
+  records what was negotiated, the client tool and version, and the command as run. The report gains a
+  **Classical fallback** section and `summary.json` a `classical_fallback` count; the score is unchanged.
+  PQCMM evidence pre-fills question 4.3.1, leaving the configuration mechanism to the vendor and the outcome
+  to the assessor when results are inconclusive. `--no-classical-probe` turns it off.
+
+### Changed
+- Route and Ingress certificate capture now use the same bounded thread pool as `--endpoints` instead of a
+  serial loop.
+
 ## [0.7.0] - 2026-11-15
 
 ### Added
@@ -144,7 +161,8 @@ First public release.
 - Key-exchange probe image so a FIPS scan host can observe X25519MLKEM768.
 - Pinned, checksum-verified downloads; CI with tests and Gitleaks.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.1...v0.6.0

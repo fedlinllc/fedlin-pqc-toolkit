@@ -373,6 +373,21 @@ def hardware_components(bom):
     return out
 
 
+def classical_fallback(bom):
+    """TLS interfaces probed with a classical-only client: [(server, outcome, negotiated)]. Facts from the CBOM."""
+    rows = []
+    for c in bom.get("components", []):
+        p = props(c)
+        o = p.get("fedlin:classicalOnlyOffer")
+        if o:
+            server = (p.get("pkic:profile:endpointRole:server") or c.get("name", "")).split(":", 1)[-1]
+            got = p.get("fedlin:classicalOnlyNegotiated", "")
+            if p.get("fedlin:classicalOnlyOfferReduced"):
+                got = (got + " " if got else "") + "(reduced FIPS offer)"
+            rows.append((server, o, got))
+    return rows
+
+
 def grade(score):
     if score is None:
         return "N/A", "no scored public-key usages found"
@@ -621,6 +636,27 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         if agility and not self_serve:
             L.append("Crypto-agility flags in the negotiated suite set: " + "; ".join(agility) + ".")
             L.append("")
+
+    # ---- classical fallback (second handshake offering only classical key exchange) ----
+    fb = classical_fallback(bom)
+    if fb:
+        L.append("## Classical fallback")
+        L.append("")
+        L.append("Each TLS endpoint whose certificate was captured was contacted a second time by a client "
+                 "offering only classical key-exchange groups (X25519, NIST curves, X448, finite-field), with "
+                 "TLS 1.2 permitted through the client's default cipher list. **Accepted**: the server chose "
+                 "classical parameters, so a harvest-now, decrypt-later recording remains possible for any client "
+                 "that does not offer ML-KEM. **Rejected**: the server refused with a handshake-failure or "
+                 "insufficient-security alert. **Inconclusive**: the handshake failed for another reason, or a "
+                 "FIPS-mode scan client (which cannot offer X25519 or X448) was refused. **Untested**: no "
+                 "connection on the second attempt. Rows marked *reduced FIPS offer* did not offer X25519 or X448. "
+                 "These results do not change the score.")
+        L.append("")
+        L.append("| Endpoint | Classical-only client | Negotiated |")
+        L.append("|---|---|---|")
+        for server, o, got in fb:
+            L.append(f"| {server} | {o} | {got or '—'} |")
+        L.append("")
 
     # ---- top exposures ----
     L.append("## Top exposures")
@@ -895,6 +931,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         "awaiting_review": len(review),
         "other_assets": ocounts,
         "hndl_exposures": len(hndl),
+        "classical_fallback": {o: sum(1 for _, x, _ in fb if x == o) for o in dict.fromkeys(x for _, x, _ in fb)},
         "cmvp": _cmvp.summary(cmvp_found, cmvp_snap),
         "secret_hygiene_detections": len(secrets),
         "regime": regime,

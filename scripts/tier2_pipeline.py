@@ -47,7 +47,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "0.7.0"
+TOOLKIT_VERSION = "0.8.0"
 
 
 def run(cmd, timeout=25):
@@ -179,23 +179,29 @@ def _is_pqc_group(g):
     return bool(g) and any(h in g.lower() for h in _PQC_HYBRIDS)
 
 
-def _probe_kex_group_container(host, port, image):
-    """Run kex probe inside a non-FIPS container (Alpine edge ships OpenSSL 3.5 w/ ML-KEM groups)."""
+def _container_s_client(host, port, image, groups, version=False):
+    """openssl s_client output from inside the probe container (raw text; empty on failure)."""
     inner = (
         # The image must ship OpenSSL >= 3.5; nothing is installed at run time (no unpinned packages).
         f"command -v openssl >/dev/null 2>&1 || {{ echo 'kex-probe-image-has-no-openssl'; exit 3; }}; "
-        f"echo | timeout 8 openssl s_client -connect {_hp(host, port)[0]} "
-        f"-servername {_hp(host, port)[1]} -groups {_KEX_GROUPS} 2>&1"
+        + ("echo \"TOOL: $(openssl version)\"; " if version else "")
+        + f"echo | timeout 8 openssl s_client -connect {_hp(host, port)[0]} "
+        f"-servername {_hp(host, port)[1]} -groups {groups} 2>&1"
     )
     try:
         p = subprocess.run(
             ["podman", "run", "--rm", "--pull=never", image, "sh", "-c", inner],
             capture_output=True, text=True, timeout=90
         )
-        return _parse_kex_group(p.stdout + p.stderr)
+        return p.stdout + p.stderr
     except Exception as e:
         sys.stderr.write(f"[warn] kex container probe {host}: {e}\n")
-        return None
+        return ""
+
+
+def _probe_kex_group_container(host, port, image):
+    """Run kex probe inside a non-FIPS container (Alpine edge ships OpenSSL 3.5 w/ ML-KEM groups)."""
+    return _parse_kex_group(_container_s_client(host, port, image, _KEX_GROUPS))
 
 
 # Built by setup.sh from images/kex-probe/Containerfile (pinned Alpine + openssl 3.5.9-r0); the image
@@ -246,6 +252,89 @@ def _probe_kex_group(host, port=443):
     return _parse_kex_group(out), "host-fips-subset", False
 
 
+# Classical-only client for the zero-legacy test (PKI Consortium PQCMM 4.3.1): every group offered is
+# classical and TLS 1.2 (which has no PQC key exchange) is allowed, so a completed handshake means the server
+# still accepts a key exchange that is not quantum-resistant. One handshake covers both versions.
+_CLASSICAL_GROUPS = "X25519:secp256r1:secp384r1:secp521r1:X448:ffdhe2048:ffdhe3072"
+_CLASSICAL_GROUPS_FIPS = "secp256r1:secp384r1:secp521r1:ffdhe2048:ffdhe3072"
+
+
+# Alerts that mean the server refused the offered parameters: handshake_failure (40) and
+# insufficient_security (71). Any other failure (reset, HTTP on the port, a required client certificate in
+# TLS 1.2, rate limiting) says nothing about key exchange and is not counted as a rejection.
+_REFUSAL = re.compile(r"alert (handshake failure|insufficient security)|SSL alert number (40|71)\b")
+# The server sent its certificate, so it had already chosen classical parameters in its ServerHello.
+_PEER_CERT = re.compile(r"^(Server certificate|Certificate chain)$", re.M)
+
+
+def _classical_result(out):
+    """(outcome, protocol, cipher, group) from s_client output offering only classical key exchange.
+
+    accepted: the handshake completed, or the server sent its certificate (it had chosen classical
+    parameters even if the handshake then failed, e.g. on a client-certificate request). rejected: the
+    server answered with handshake_failure or insufficient_security before sending a certificate.
+    inconclusive: connected, but the handshake failed for another reason. None: no TCP connection.
+    """
+    proto, cipher = _parse_session(out)
+    if cipher:
+        return "accepted", proto, cipher, _parse_kex_group(out)
+    if "CONNECTED(" not in out:
+        return None, None, None, None
+    if _PEER_CERT.search(out) and "no peer certificate available" not in out:
+        return "accepted", proto, None, _parse_kex_group(out)
+    if _REFUSAL.search(out):
+        return "rejected", None, None, None
+    return "inconclusive", None, None, None
+
+
+CLASSICAL_PROBE = True  # cleared by --no-classical-probe
+
+
+def _probe_classical_only(host, port=443):
+    """Offer only classical key exchange and record whether the server accepts it.
+
+    Facts only: outcome (accepted / rejected / inconclusive / untested), what was negotiated, the client tool
+    and version, and the command as run. Same client order as _probe_kex_group. A FIPS-mode client cannot
+    offer X25519 or X448, so a rejection from that reduced offer is 'inconclusive' (the server may accept
+    X25519); an acceptance from it is still an acceptance. A client that ran but got no TCP connection ends
+    the probe as 'untested' rather than trying the next client.
+    """
+    hp, h = _hp(host, port)
+
+    def s_client(binary, groups):
+        return f"echo | timeout 8 {binary} s_client -connect {hp} -servername {h} -groups {groups}"
+
+    def result(out, tool, cmd, complete):
+        outcome, proto, cipher, grp = _classical_result(out)
+        outcome = outcome or "untested"
+        if outcome == "rejected" and not complete:
+            outcome = "inconclusive"
+        return {"outcome": outcome, "protocol": proto, "cipher": cipher, "group": grp,
+                "tool": tool or "openssl (version not reported)", "command": cmd, "offer_complete": complete}
+
+    cmd = s_client("openssl", _CLASSICAL_GROUPS)
+    out = run(cmd + " 2>&1")
+    if "SSL_CONF_cmd" not in out:
+        return result(out, run("openssl version"), cmd, True)
+    probe = os.environ.get("FEDLIN_KEX_PROBE_OPENSSL", "")
+    if probe and os.path.isfile(probe) and os.access(probe, os.X_OK):
+        q = shlex.quote(probe)
+        cmd = s_client(q, _CLASSICAL_GROUPS)
+        pout = run(cmd + " 2>&1")
+        if pout and "SSL_CONF_cmd" not in pout:
+            return result(pout, run(f"{q} version"), cmd, True)
+    img = os.environ.get("FEDLIN_KEX_PROBE_IMAGE", "") or _default_probe_image()
+    if img:
+        cout = _container_s_client(host, port, img, _CLASSICAL_GROUPS, version=True)
+        m = re.search(r"^TOOL: (.+)$", cout, re.M)
+        if m:  # the container ran its OpenSSL; whatever it saw is the answer
+            inner = s_client("openssl", _CLASSICAL_GROUPS) + " 2>&1"
+            return result(cout, m.group(1).strip(), f"podman run --rm --pull=never {img} sh -c "
+                          + shlex.quote(inner), True)
+    cmd = s_client("openssl", _CLASSICAL_GROUPS_FIPS)
+    return result(run(cmd + " 2>&1"), run("openssl version"), cmd, False)
+
+
 def capture_cert(host, port=443):
     if not valid_host(host):
         sys.stderr.write(f"[warn] endpoint {host!r}: not a valid hostname or IP, skipped\n")
@@ -274,6 +363,7 @@ def capture_cert(host, port=443):
         kex_partial = (f"FIPS-mode client could not offer X25519MLKEM768; server declined "
                        f"SecP256r1MLKEM768/SecP384r1MLKEM1024 and negotiated {kex_group} with this client")
         kex_group = None
+    classical_only = _probe_classical_only(host, port) if CLASSICAL_PROBE else None
     return {
         "host": host if port == 443 else f"{host}:{port}",
         "subject": grab(r"subject=(.*)", meta),
@@ -290,6 +380,7 @@ def capture_cert(host, port=443):
         "tls_cipher": tls_cipher,
         "kex_probe_via": kex_probe_via,
         "kex_partial": kex_partial,
+        "classical_only": classical_only,
     }
 
 
@@ -306,12 +397,7 @@ def _rfc3339(s):
 def capture_routes(kube="oc"):
     hosts = run(f"{kube} get routes -A -o jsonpath='{{range .items[*]}}{{.spec.host}}{{\"\\n\"}}{{end}}'")
     hosts = sorted(set(h for h in hosts.splitlines() if h))
-    certs = []
-    for h in hosts:
-        c = capture_cert(h)
-        if c:
-            certs.append(c)
-    return certs
+    return capture_endpoints(hosts)  # same bounded thread pool as --endpoints
 
 
 def capture_ingress(kube="kubectl"):
@@ -324,12 +410,7 @@ def capture_ingress(kube="kubectl"):
     rule_hosts = run(f"{kube} get ingress -A -o jsonpath='{{range .items[*]}}{{range .spec.rules[*]}}{{.host}}{{\"\\n\"}}{{end}}{{end}}'")
     tls_hosts = run(f"{kube} get ingress -A -o jsonpath='{{range .items[*]}}{{range .spec.tls[*]}}{{range .hosts[*]}}{{@}}{{\"\\n\"}}{{end}}{{end}}{{end}}'")
     hosts = sorted(set(h for h in (rule_hosts + "\n" + tls_hosts).splitlines() if h))
-    certs = []
-    for h in hosts:
-        c = capture_cert(h)
-        if c:
-            certs.append(c)
-    return certs
+    return capture_endpoints(hosts)  # same bounded thread pool as --endpoints
 
 
 def parse_endpoints(values):
@@ -564,7 +645,8 @@ class CBOM:
         self.components.append(comp)
         self.dependencies.append({"ref": ref, "dependsOn": deps})
 
-    def add_tls_kex(self, host, kex_group=None, protocol=None, cipher=None, kex_partial=None):
+    def add_tls_kex(self, host, kex_group=None, protocol=None, cipher=None, kex_partial=None,
+                    classical_only=None):
         """Add one TLS interface per endpoint: negotiated version, cipher suite, key exchange.
 
         Shaped for the PKI Consortium CBOM interface profiles: the asset is a 'service' interface
@@ -621,6 +703,19 @@ class CBOM:
         props.append({"name": P + "disclosure:implementationPurl", "value": "unknown"})
         if kex_partial:
             props.append({"name": "fedlin:kex_partial_evidence", "value": kex_partial})
+        co = classical_only or {}
+        if co.get("outcome"):
+            # Second handshake from a client offering only classical key exchange (fact, not a verdict).
+            props.append({"name": "fedlin:classicalOnlyOffer", "value": co["outcome"]})
+            got = " ".join(x for x in (co.get("protocol"), co.get("cipher"), co.get("group")) if x)
+            if got:
+                props.append({"name": "fedlin:classicalOnlyNegotiated", "value": got})
+            if co.get("offer_complete") is False:
+                props.append({"name": "fedlin:classicalOnlyOfferReduced",
+                              "value": "FIPS-mode client: X25519 and X448 not offered"})
+            for k, name in (("tool", "fedlin:classicalOnlyTool"), ("command", "fedlin:classicalOnlyCommand")):
+                if co.get(k):
+                    props.append({"name": name, "value": co[k]})
         self.components.append({
             "type": "cryptographic-asset", "bom-ref": ref,
             "name": f"TLS {version or '(version not observed)'} - {host}",
@@ -1053,6 +1148,9 @@ def main():
                          "--exclude docs/ --exclude scratch/ --exclude '*.backup' — cuts false-positive noise")
     ap.add_argument("--no-dep-crypto", action="store_true",
                     help="disable inferring crypto capability from known library dependencies (cdxgen SBOM)")
+    ap.add_argument("--no-classical-probe", action="store_true",
+                    help="skip the second, classical-only handshake per TLS endpoint (PQCMM 4.3.1 evidence); "
+                         "it adds about one handshake (2-3 s on a FIPS host using the probe container) per endpoint")
     ap.add_argument("--endpoints", action="append", default=[],
                     help="live TLS endpoint scan WITHOUT a cluster: a file of host[:port] lines (# comments ok) "
                          "and/or an inline comma list, e.g. --endpoints agency-hosts.txt --endpoints www.agency.gov. "
@@ -1079,6 +1177,8 @@ def main():
         if action.dest in KIT_FLAGS and not KIT_FLAGS[action.dest]:
             action.help = argparse.SUPPRESS
     args = ap.parse_args()
+    global CLASSICAL_PROBE
+    CLASSICAL_PROBE = not args.no_classical_probe
     for dest, avail in KIT_FLAGS.items():
         val, default = getattr(args, dest, None), ap.get_default(dest)
         if not avail and val not in (None, False, "", [], default):
@@ -1167,7 +1267,7 @@ def main():
     for c in certs:
         b.add_certificate(c)
         b.add_tls_kex(c["host"], c.get("kex_group"), c.get("tls_protocol"), c.get("tls_cipher"),
-                      c.get("kex_partial"))
+                      c.get("kex_partial"), c.get("classical_only"))
     if certs:
         vias = [c.get("kex_probe_via") for c in certs]
         img = os.environ.get("FEDLIN_KEX_PROBE_IMAGE", "") or _default_probe_image()

@@ -85,7 +85,10 @@ class Facts:
                         "kex": kex, "kex_vulnerable": r.get("quantum_vulnerable"),
                         "kex_family": r.get("family"), "kex_canonical": r.get("canonical") or "",
                         "auth": p.get(P + "authentication", ""), "enc": p.get(P + "encryption", ""),
-                        "server": p.get(P + "endpointRole:server", ""), "version": p.get(P + "protocolVersion", "")})
+                        "server": p.get(P + "endpointRole:server", ""), "version": p.get(P + "protocolVersion", ""),
+                        "co": p.get("fedlin:classicalOnlyOffer"), "co_got": p.get("fedlin:classicalOnlyNegotiated", ""),
+                        "co_tool": p.get("fedlin:classicalOnlyTool", ""),
+                        "co_cmd": p.get("fedlin:classicalOnlyCommand", "")})
         return out
 
     def cert_rows(self):
@@ -176,6 +179,29 @@ def evidence(F):
                          "A completed handshake between the toolkit's client and the server. Whether the two "
                          "implementations are independent depends on the server's implementation, which an outside "
                          "scan cannot see.")
+    tested = [i for i in ifaces if i["co"]]
+    if tested:
+        seen = [i["co"] for i in tested]
+        # The model's select allows rejected / accepted / untested. One acceptance is a finding; "rejected"
+        # only if every endpoint refused; nothing contacted is "untested"; any other mix is left to the assessor.
+        overall = ("accepted" if "accepted" in seen else "rejected" if set(seen) == {"rejected"}
+                   else "untested" if set(seen) == {"untested"} else None)
+        counts = ", ".join(f"{seen.count(o)} {o}" for o in dict.fromkeys(seen))
+        lines = []
+        for i in tested:
+            host = i["server"].split(":", 1)[-1]
+            lines.append(f"{host}: {i['co_cmd'] or '(command not recorded)'} -> {i['co']}"
+                         + (f" ({i['co_got']})" if i["co_got"] else ""))
+        E["4.3.1"] = _ev({"testTool": "; ".join(dict.fromkeys(i["co_tool"] for i in tested if i["co_tool"])),
+                          "testCommand": "\n".join(lines), "classicalConnectionOutcome": overall}, "observed",
+                         "A second handshake from a client offering only classical key exchange (TLS 1.2 allowed). "
+                         "It tests the deployment as configured; whether a zero-legacy configuration was applied, and "
+                         "how (configurationMechanism), is the vendor's to state. Only key exchange was restricted: "
+                         "the server certificate's signature algorithm is a separate question (4.3.3). "
+                         f"Per endpoint: {counts}. 'inconclusive' means the handshake failed for a reason other than "
+                         "a handshake-failure/insufficient-security alert, or a FIPS-mode client (no X25519/X448) was "
+                         "refused; when endpoints are inconclusive and none accepted, the outcome field is left for "
+                         "the assessor.")
     E["3.2.1"] = _ev({"inventoryFormat": f"CycloneDX {F.bom.get('specVersion', '?')}", "productVersion": version,
                       "lastUpdated": F.timestamp[:10]}, "observed")
     E["4.2.1"] = _ev({"cbomFormat": f"CycloneDX {F.bom.get('specVersion', '?')} (cryptoProperties)",

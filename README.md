@@ -95,8 +95,22 @@ post-quantum key exchange. `setup.sh` builds a small probe image (Alpine pinned 
 same OpenSSL. Without either, anything the scan could not observe is recorded as `unknown`, never guessed, and the report is marked **Incomplete** with no letter
 grade.
 
-The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. It does not
-test whether the same endpoint still accepts classical-only clients.
+The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. Each endpoint
+whose certificate was captured is then contacted a second time by a client offering only classical
+key-exchange groups, with TLS 1.2 permitted through the client's default cipher list (on RHEL hosts,
+crypto-policies exclude static-RSA suites, so those are not covered). The CBOM records the outcome as
+`fedlin:classicalOnlyOffer`:
+
+- **accepted:** the server chose classical parameters (the handshake completed, or the server sent its
+  certificate before failing for another reason).
+- **rejected:** the server refused with a handshake-failure or insufficient-security alert.
+- **inconclusive:** the handshake failed for any other reason (reset, HTTP on the port), or a FIPS-mode
+  client, which cannot offer X25519 or X448, was refused.
+- **untested:** no connection on the second attempt.
+
+The CBOM also records what was negotiated and the client tool, version and command as run. The report
+lists the results under **Classical fallback**; they do not change the score. `--no-classical-probe` skips
+the second handshake, which costs about 1 s per endpoint (2-3 s on a FIPS host using the probe container).
 
 ## FIPS 140-3 validation (CMVP)
 
@@ -137,7 +151,8 @@ recorded and flagged when a date is missing or after 2030; they are never verifi
 `scripts/pqcmm_evidence.py --cbom out/cbom.json [--answers answers.json]` maps what a scan observed to the
 PKI Consortium PQC Maturity Model (v1.0.1, vendored in `third_party/pkic-pqcmm`, MIT). It pre-fills the
 model's own response fields for the questions a CBOM can evidence (algorithms in use, where they are used,
-interoperability from an observed handshake, inventory completeness, non-quantum-safe features, a draft
+interoperability from an observed handshake, inventory completeness, the classical-only client test for
+zero-legacy operation, non-quantum-safe features, a draft
 harvest-now-decrypt-later register, hybrid use, CMVP candidates, identifiers) and marks where each value came
 from: observed, derived, snapshot, or vendor-stated.
 
