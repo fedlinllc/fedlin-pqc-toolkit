@@ -113,6 +113,10 @@ Stated so a result is not read as more than it is:
   the 2.0 release.
 - The PKI Consortium CBOM profiles are working-group drafts (`pkic.example` identifiers). "Conforms" means
   the vendored validator reports CONFORMS for the entry profile at the pinned commit.
+- The toolkit container image (`Containerfile`) uses the UBI 9 OpenSSL, which follows the host's FIPS
+  mode and system crypto policy and so may not offer X25519MLKEM768. Endpoint scans from inside the
+  image can therefore come back Incomplete; run endpoint scans from the host after `setup.sh`, which uses
+  the probe image.
 - `setup.sh` targets Linux x86-64. Podman is needed for the probe image and cbomkit-theia; without it
   setup skips both and endpoint scans fall back as described above.
 
@@ -127,9 +131,11 @@ Standard library only and offline. The suite includes the PKI Consortium CBOM va
 
 ## Supply chain
 
-Tool downloads are pinned with SHA-256 sums in `toolkit.lock`, base images by digest, and pnpm by
-version and sha512 (verified through corepack). A mismatch stops setup or the image build. Exceptions:
-OS packages inside the toolkit image come from the UBI 9 repositories at build time. `--deep` uses the cluster's own debug
+Tool downloads are pinned with SHA-256 sums in `toolkit.lock`, base images by digest (cbomkit-theia is
+built from a pinned commit in the same digest-pinned Go image `setup.sh` and the Containerfile share),
+and pnpm by version and sha512. A mismatch stops setup or the image build. `setup.sh` installs nothing
+outside the repository and needs no root. Exceptions: OS packages installed at build time come from the
+distribution repositories (UBI 9 in the toolkit image, Alpine in the probe image and the Go build). `--deep` uses the cluster's own debug
 image on OpenShift; elsewhere it needs `--debug-image`, which you should pin by digest.
 
 ## Acknowledgements

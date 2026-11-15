@@ -373,15 +373,15 @@ def hardware_components(bom):
 
 def grade(score):
     if score is None:
-        return "N/A", "no classified algorithm assets found"
+        return "N/A", "no scored public-key usages found"
     if score >= 90:
         return "A — PQC-ready", "the estate is largely on quantum-resistant cryptography"
     if score >= 70:
         return "B — On track", "a minority of assets remain quantum-vulnerable"
     if score >= 40:
-        return "C — Partial", "roughly half the classified crypto is quantum-vulnerable"
+        return "C — Partial", "roughly half the scored public-key usages are quantum-vulnerable"
     if score >= 15:
-        return "D — At risk", "most classified crypto is quantum-vulnerable"
+        return "D — At risk", "most scored public-key usages are quantum-vulnerable"
     return "F — Not started", "the estate is almost entirely quantum-vulnerable"
 
 
@@ -509,7 +509,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append(f"**{sysname}** scores " + "; ".join(bits) + ".")
         L.append("")
         if score is None:
-            lead = ("No algorithm assets were classified in this capture — the score is not applicable. "
+            lead = ("No algorithm assets were assessed in this capture — the score is not applicable. "
                     "Extend the scan (runtime/endpoint/source) before drawing a readiness conclusion.")
         elif score >= 70:
             lead = "The estate is largely quantum-ready — the work is hardening and monitoring."
@@ -641,7 +641,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
             L.append(f"- **{a['name']}** — {a['priority']}. Target: {a['target']}.")
         L.append("")
     if not top and not hndl:
-        L.append("No quantum-vulnerable assets detected among classified algorithms.")
+        L.append("No quantum-vulnerable assets detected among the algorithms assessed.")
         L.append("")
 
     has_roadmap = _roadmap is not None and not self_serve
@@ -773,7 +773,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     if not self_serve:
         L.append("## Appendix A — CBOM inventory")
         L.append("")
-        L.append("The classified cryptographic assets underlying the score, for auditor traceability. The "
+        L.append("The algorithm assets underlying the score, for auditor traceability. The "
                  "authoritative artifact is the attached CycloneDX 1.6 CBOM (ECMA-424); this table is its "
                  "human-legible projection.")
         L.append("")
@@ -1017,7 +1017,7 @@ def main():
     with open(out, "w") as f:
         f.write(md + "\n")
     print(f"[ok] report: {out} — score {summary['readiness_score']} ({summary['grade']}), "
-          f"{summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
+          f"algorithms (all lanes): {summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
     if args.html:
         html_out = args.html if args.html != "auto" else out.replace(".md", ".html")
         sysname = summary.get("system", "system")

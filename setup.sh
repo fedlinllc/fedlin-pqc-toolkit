@@ -27,42 +27,48 @@ if [ "$HAVE_PODMAN" = 1 ] && ! podman image exists localhost/fedlin-kex-probe:0.
 fi
 
 THEIA_COMMIT=1ce8b4d946c699198efe95de287a61832c82dd74   # keep in sync with toolkit.lock
+GO_IMAGE=docker.io/library/golang:1.26-alpine@sha256:30b1e546a9c7fa3b747c2bdba3a0c7bdf3a02ebb4c5b8405d2f948d7e8aac4ec   # same as Containerfile
 if [ "$HAVE_PODMAN" = 0 ]; then
   echo "[warn] podman not found: skipping the key-exchange probe image and cbomkit-theia" >&2
 elif [ ! -x bin/cbomkit-theia ]; then
   echo "building cbomkit-theia (static Go binary via podman) ..."
   tmp="$(mktemp -d)"
-  git clone https://github.com/PQCA/cbomkit-theia "$tmp/theia"
-  git -C "$tmp/theia" checkout "$THEIA_COMMIT"
-  podman build -t cbomkit-theia:local "$tmp/theia"
-  cid="$(podman create cbomkit-theia:local)"
-  podman cp "$cid:/app/cbomkit-theia" bin/cbomkit-theia
-  podman rm "$cid" >/dev/null
-  chmod +x bin/cbomkit-theia
-  rm -rf "$tmp"
+  git clone -q https://github.com/PQCA/cbomkit-theia "$tmp/theia"
+  git -C "$tmp/theia" -c advice.detachedHead=false checkout -q "$THEIA_COMMIT"
+  # Build in the same digest-pinned Go image as the Containerfile (not upstream's unpinned Dockerfile).
+  # Go module checksums stay verified against go.sum and the Go checksum database.
+  podman run --rm -v "$tmp/theia:/src:Z" -w /src \
+    -e CGO_ENABLED=0 -e GOOS=linux -e GOFLAGS=-buildvcs=false \
+    "$GO_IMAGE" go build -ldflags="-s -w" -trimpath -o /src/cbomkit-theia .
+  install -m 0755 "$tmp/theia/cbomkit-theia" bin/cbomkit-theia
+  podman unshare rm -rf "$tmp"
 fi
 [ -x bin/cbomkit-theia ] && bin/cbomkit-theia --help >/dev/null && echo "cbomkit-theia: ok"
 
 echo "installing node deps (cdxgen + @noble/post-quantum signer) via pnpm ..."
-# pnpm is pinned in package.json "packageManager" (exact version + sha512, verified by corepack).
-# Install strictly from pnpm-lock.yaml; no unfrozen fallback.
+# pnpm is pinned in package.json "packageManager" (exact version + sha512). Nothing is installed
+# globally, so setup needs no root. Install strictly from pnpm-lock.yaml; no unfrozen fallback.
 if command -v corepack >/dev/null 2>&1; then
-  corepack enable pnpm
+  # corepack fetches the pinned pnpm into its own cache and checks the sha512.
+  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   PNPM="corepack pnpm"
 else
-  # No corepack: fetch the same pnpm tarball and check it against the sha512 in package.json.
+  # No corepack: fetch the same pnpm tarball, check it against package.json, and run it from bin/.
   want="$(sed -n 's/.*"packageManager": *"pnpm@10.34.9+sha512\.\([0-9a-f]*\)".*/\1/p' package.json)"
-  tmp="$(mktemp -d)"
-  curl -sSfL -o "$tmp/pnpm.tgz" https://registry.npmjs.org/pnpm/-/pnpm-10.34.9.tgz
-  echo "$want  $tmp/pnpm.tgz" | sha512sum -c --quiet - \
-    || { echo "pnpm sha512 mismatch; refusing to install" >&2; rm -rf "$tmp"; exit 1; }
-  npm install -g "$tmp/pnpm.tgz"
-  rm -rf "$tmp"
-  PNPM="pnpm"
+  if [ ! -f bin/pnpm-10.34.9/bin/pnpm.cjs ]; then
+    tmp="$(mktemp -d)"
+    curl -sSfL -o "$tmp/pnpm.tgz" https://registry.npmjs.org/pnpm/-/pnpm-10.34.9.tgz
+    echo "$want  $tmp/pnpm.tgz" | sha512sum -c --quiet - \
+      || { echo "pnpm sha512 mismatch; refusing to install" >&2; rm -rf "$tmp"; exit 1; }
+    mkdir -p bin/pnpm-10.34.9
+    tar -xzf "$tmp/pnpm.tgz" -C bin/pnpm-10.34.9 --strip-components=1
+    rm -rf "$tmp"
+  fi
+  PNPM="node bin/pnpm-10.34.9/bin/pnpm.cjs"
 fi
 $PNPM install --prod --frozen-lockfile
 ./node_modules/.bin/cdxgen --version
 
 echo "ready. Example:"
-echo "  export KUBECONFIG=\$HOME/.kube/config"
-echo "  python3 scripts/tier2_pipeline.py --out out/cbom.json --name <system> [--repo <path>] --validate"
+echo "  python3 scripts/tier2_pipeline.py --no-runtime --endpoints example.com \\"
+echo "    --name example.com --report --out out/cbom.json"

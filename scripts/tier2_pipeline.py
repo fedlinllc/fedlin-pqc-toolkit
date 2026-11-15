@@ -1225,7 +1225,7 @@ def main():
             with open(summ, "w") as f:
                 json.dump(summary, f, indent=2)
             print(f"[ok] report: {rpt} — score {summary['readiness_score']} ({summary['grade']}), "
-                  f"{summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
+                  f"algorithms (all lanes): {summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
         except Exception as e:
             sys.stderr.write(f"[warn] report generation failed: {e}\n")
 
