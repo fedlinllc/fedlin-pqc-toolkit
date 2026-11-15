@@ -1,0 +1,54 @@
+# fedlin-pqc-toolkit — portable, air-gappable PQC assessment toolkit.
+# Bundles: python pipeline + CNSA 2.0 overlay, cyclonedx-cli, cdxgen, cbomkit-theia, oc, openssl, jq.
+
+# --- stage 1: build cbomkit-theia from source (stripped static binary) ---
+FROM docker.io/library/golang:1.26-alpine@sha256:30b1e546a9c7fa3b747c2bdba3a0c7bdf3a02ebb4c5b8405d2f948d7e8aac4ec AS theia
+ARG THEIA_COMMIT=1ce8b4d946c699198efe95de287a61832c82dd74
+RUN apk add --no-cache git ca-certificates
+# Verified fetch: TLS + Go checksum-db verification left ON (this is a crypto-assurance tool).
+ENV GOFLAGS=-buildvcs=false
+RUN git clone https://github.com/PQCA/cbomkit-theia /src \
+ && cd /src && git checkout ${THEIA_COMMIT} \
+ && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o /cbomkit-theia .
+
+# --- stage 2: final runtime — MINIMAL UBI9 node image (node+npm present, microdnf-based) ---
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal@sha256:0cc4ae118138dd07280d5abaa12b6a018e5bc82c048296f3c3676e62d3a1d8a8
+USER 0
+# cyclonedx-cli is a self-contained .NET binary; libicu + invariant mode satisfy its globalization needs
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+
+# One layer: OS deps + oc/kubectl + cyclonedx-cli, then purge caches. tar/gzip only needed to unpack oc.
+RUN microdnf -y install python3 openssl jq libicu tar gzip \
+ && curl -sSfL -o /tmp/oc.tgz https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.22.0/openshift-client-linux-4.22.0.tar.gz \
+ && echo "b6e027b304678d55e89ea1e8fe5c89e832f9c1a73518a1846e8cf9601c647aef  /tmp/oc.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/oc.tgz -C /usr/local/bin oc kubectl \
+ && curl -sSfL -o /usr/local/bin/cyclonedx https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.32.0/cyclonedx-linux-x64 \
+ && echo "454879e6a4a405c8a13bff49b8982adcb0596f3019b26b0811c66e4d7f0783e1  /usr/local/bin/cyclonedx" | sha256sum -c - \
+ && chmod +x /usr/local/bin/cyclonedx \
+ && microdnf -y remove tar gzip \
+ && microdnf clean all \
+ && rm -rf /tmp/oc.tgz /var/cache/* /var/log/* /root/.cache
+
+# cbomkit-theia (stripped binary from stage 1)
+COPY --from=theia /cbomkit-theia /usr/local/bin/cbomkit-theia
+
+WORKDIR /opt/toolkit
+COPY package.json pnpm-lock.yaml ./
+# ubi9/nodejs-22-minimal ships npm but NOT corepack, so bootstrap the pnpm CLI with npm (that only
+# fetches the pnpm binary — pnpm still installs the project deps from pnpm-lock.yaml, off the lockfile).
+RUN npm install -g pnpm@10.34.9 \
+ && pnpm install --prod --frozen-lockfile \
+ && pnpm store prune \
+ && npm cache clean --force \
+ && rm -rf /root/.npm /root/.cache /root/.local/share/pnpm/store /tmp/*
+COPY scripts ./scripts
+COPY README.md ./
+RUN mkdir -p /opt/toolkit/out && chmod -R a+rwX /opt/toolkit/out
+
+ENV PATH="/opt/toolkit/node_modules/.bin:${PATH}"
+# tool paths are baked; caller supplies --out/--name/--repo/--theia-dir/... plus KUBECONFIG
+ENTRYPOINT ["python3", "scripts/tier2_pipeline.py", \
+            "--cyclonedx", "/usr/local/bin/cyclonedx", \
+            "--cdxgen", "/opt/toolkit/node_modules/.bin/cdxgen", \
+            "--theia", "/usr/local/bin/cbomkit-theia"]
+CMD ["--help"]

@@ -1,0 +1,41 @@
+# fedlin-pqc-toolkit — pinned versions (v0.5.0-dev)
+# Reproducibility manifest. Update deliberately; the OCI image + setup.sh should match these.
+# Format: component = version/ref (source)
+
+[runtime]
+python          = 3.9        # ubi9 base
+node            = 22         # ubi9/nodejs-22
+pnpm            = 10.34.9    # package.json packageManager pins sha512; installs are --frozen-lockfile only
+
+[bundled-tools]
+cyclonedx-cli   = 0.32.0     # github.com/CycloneDX/cyclonedx-cli; linux-x64 sha256 454879e6a4a405c8a13bff49b8982adcb0596f3019b26b0811c66e4d7f0783e1 (matches GitHub asset digest)
+cdxgen          = 12.7.0     # npm @cyclonedx/cdxgen (pinned in package-lock.json)
+cbomkit-theia   = 1ce8b4d946c699198efe95de287a61832c82dd74  # github.com/PQCA/cbomkit-theia (built from source, static)
+oc              = 4.22.0     # mirror.openshift.com openshift-client-linux-4.22.0.tar.gz sha256 b6e027b304678d55e89ea1e8fe5c89e832f9c1a73518a1846e8cf9601c647aef (from the mirror's sha256sum.txt)
+
+[base-images]
+builder         = docker.io/library/golang:1.26-alpine@sha256:30b1e546a9c7fa3b747c2bdba3a0c7bdf3a02ebb4c5b8405d2f948d7e8aac4ec    # verified fetch (no GOINSECURE/GONOSUMDB/GIT_SSL_NO_VERIFY)
+final           = registry.access.redhat.com/ubi9/nodejs-22-minimal@sha256:0cc4ae118138dd07280d5abaa12b6a018e5bc82c048296f3c3676e62d3a1d8a8   # slimmed from nodejs-22; digest resolved 2026-11-15
+
+[kex-probe-image]
+# images/kex-probe/Containerfile, built by setup.sh. Used when the scan host's OpenSSL runs in FIPS mode.
+base            = docker.io/library/alpine:3.22@sha256:9db2934886712d877c932e07249c75a59e6ca27adfbccc05261987a17bef2d63
+openssl         = 3.5.9-r0   # Alpine package, exact version
+image           = localhost/fedlin-kex-probe:0.1   # image id sha256:cdcbf9a46e972ef46d7ab0830681d40ddd85d3abe316fd90b58fdca9da55f29d (built 2026-11-15)
+
+[image]
+tag             = 0.2        # image ~1.02 GB (was 1.66 GB); air-gap bundle ~433 MB (was ~809 MB)
+
+[core-ip]
+cnsa20_ruleset  = 1.0.0      # scripts/cnsa20_ruleset.py (tests: tests/test_ruleset.py; changes: CORRECTIONS.md)
+crosswalk       = 0.1        # scripts/crosswalk.py (800-53 -> CMMC/HIPAA/PCI/GLBA/NERC/FISMA)
+report          = 0.4        # scripts/report.py (scorecard + roadmap; self-serve; secret-hygiene split; capability marks)
+delta           = 0.1        # scripts/delta.py (baseline diff -> continuous-monitoring evidence)
+pipeline        = 0.5        # scripts/tier2_pipeline.py (+universal overlay/no-runtime/self-serve/merge-cbom/exclude/dep-crypto)
+
+[source-scan]
+# CBOMkit + sonar-cryptography wired via the merge-ingest side-car (run out-of-band, --merge-cbom).
+# Not pinned into the OCI image on purpose — it's a compose+DB service; embedding it would break
+# the portable single-container / air-gap / Mode-C design. Driven by scripts/run-cbomkit.sh.
+cbomkit         = external   # github.com/PQCA/cbomkit (compose: make production; API :8081)
+sonar-cryptography = external  # CBOMkit-hyperion scanner (Java/Python/Go source)

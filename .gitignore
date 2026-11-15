@@ -1,0 +1,28 @@
+# dependencies (reinstall via setup.sh / npm ci)
+node_modules/
+
+# vendored binaries (fetched/built by setup.sh — large, not committed)
+bin/
+
+# air-gap image bundles
+dist/
+
+# generated CBOMs + intermediates (may contain internal system metadata)
+out/
+*.runtime.json
+*.deps.json
+
+# misc
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+
+# scrim stratum-A generated certs+keys (reproducible via scrim/gen-cert-bank.sh)
+scrim/certbank/
+
+# scrim temp scripts (copied into results dir for SELinux context; deleted by cleanup trap)
+scrim/results-*/_*.ps1
+
+# truncated/partial CBOM files from Azure run-command 4096-byte stdout limit
+scrim/results-*/*-cbom.json
