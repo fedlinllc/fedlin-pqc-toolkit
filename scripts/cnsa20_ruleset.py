@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.0"
+RULESET_VERSION = "1.0.1"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -137,6 +137,24 @@ ALGORITHMS = {
                                 cite=["SSH-MLKEM", "FIPS203", "CNSA2"],
                                 note="SSH hybrid ML-KEM-768 + X25519 key exchange.",
                                 target={"civilian": "None (hybrid ML-KEM-768)", "nss": "ML-KEM-1024 based KEX (CNSA 2.0)"}),
+    "mlkem768nistp256-sha256": _a("pqc", "kem", _KEM_FN, level=3, compliant=_CIV, family="ML-KEM",
+                                  param="mlkem768nistp256-sha256", controls=["SC-8", "SC-12", "SC-13"],
+                                  cite=["SSH-MLKEM", "FIPS203", "CNSA2"],
+                                  note="SSH hybrid ML-KEM-768 + ECDH P-256 key exchange.",
+                                  target={"civilian": "None (hybrid ML-KEM-768)",
+                                          "nss": "mlkem1024nistp384-sha384 or ML-KEM-1024 (CNSA 2.0)"}),
+    "mlkem1024nistp384-sha384": _a("pqc", "kem", _KEM_FN, level=5, compliant=_BOTH, family="ML-KEM",
+                                   param="mlkem1024nistp384-sha384", controls=["SC-8", "SC-12", "SC-13"],
+                                   cite=["SSH-MLKEM", "FIPS203", "CNSA2"],
+                                   note="SSH hybrid ML-KEM-1024 + ECDH P-384 key exchange.",
+                                   target={"civilian": "None (hybrid ML-KEM-1024)",
+                                           "nss": "None (ML-KEM-1024 hybrid)"}),
+    "x448mlkem1024": _a("pqc", "kem", _KEM_FN, level=5, compliant=_CIV, family="ML-KEM",
+                        param="X448MLKEM1024", standard="pre-standard", controls=["SC-8", "SC-12", "SC-13"],
+                        cite=["FIPS203", "CNSA2"],
+                        note="Hybrid X448 + ML-KEM-1024. Quantum-resistant; not a registered TLS group.",
+                        target={"civilian": "None (hybrid ML-KEM-1024)",
+                                "nss": "SecP384r1MLKEM1024 or ML-KEM-1024 (CNSA 2.0)"}),
     "sntrup761x25519-sha512": _a("pqc", "kem", _KEM_FN, compliant=_NONE, family="NTRU-Prime",
                                  param="sntrup761x25519-sha512", standard="non-nist",
                                  controls=["SC-8", "SC-12"], cite=["SSH-SNTRUP", "SSH-MLKEM"],
@@ -360,6 +378,9 @@ _ALIAS_RAW = {
     "secp256r1mlkem768": "secp256r1mlkem768", "p256mlkem768": "secp256r1mlkem768",
     "secp384r1mlkem1024": "secp384r1mlkem1024", "p384mlkem1024": "secp384r1mlkem1024",
     "mlkem768x25519-sha256": "mlkem768x25519-sha256",
+    "mlkem768nistp256-sha256": "mlkem768nistp256-sha256",
+    "mlkem1024nistp384-sha384": "mlkem1024nistp384-sha384",
+    "x448mlkem1024": "x448mlkem1024", "x448_mlkem1024": "x448mlkem1024",
     "sntrup761x25519-sha512": "sntrup761x25519-sha512",
     "sntrup761x25519-sha512@openssh.com": "sntrup761x25519-sha512",
     "x25519kyber768draft00": "x25519kyber768draft00", "x25519_kyber768": "x25519kyber768draft00",
@@ -575,7 +596,9 @@ def normalize(name, bits=None):
 
     # 4. Explicit PQC parameter sets inside longer names
     m = re.search(r"ml-?kem-?(512|768|1024)", low) or re.search(r"mlkem(512|768|1024)", c)
-    if m and not re.search(r"(x25519|secp|p256|p384)", c):
+    if m:
+        # Hybrids not listed above (e.g. a future curve pairing) are judged by their ML-KEM component;
+        # the classical half never makes a hybrid quantum-vulnerable.
         return [("ml-kem-" + m.group(1), None, raw)], None
     m = re.search(r"ml-?dsa-?(44|65|87)", low) or re.search(r"mldsa(44|65|87)", c)
     if m:
@@ -590,6 +613,14 @@ def normalize(name, bits=None):
     comps = []
     is_suite = c.startswith("tls") and ("with" in toks or len(toks) >= 4) or \
         any(t in toks for t in ("ecdhe", "dhe", "edh")) and any(t.startswith("aes") or t in ("chacha20", "3des", "des", "rc4") for t in toks)
+    # OpenSSL TLS 1.2 suite names carry no key-exchange token when the key exchange is RSA key
+    # transport (AES256-SHA = TLS_RSA_WITH_AES_256_CBC_SHA). No forward secrecy: recorded traffic is
+    # decryptable by whoever later recovers the server's RSA key, classically or with a quantum computer.
+    static_rsa = (not c.startswith("tls") and len(toks) >= 2
+                  and re.match(r"^(aes(128|256)?|camellia(128|256)?|aria(128|256)|des|rc4|idea|seed|null)$", toks[0])
+                  and toks[-1] in ("sha", "sha256", "sha384", "md5")
+                  and not set(toks) & {"psk", "srp", "kx", "ecdh", "dh", "anon", "adh", "aecdh"})
+    is_suite = is_suite or bool(static_rsa)
     if is_suite:
         tok_set = set(toks)
         if tok_set & {"null", "anon", "export", "exp"}:
@@ -598,8 +629,8 @@ def normalize(name, bits=None):
             comps.append(("ecdh", None, raw + " (key exchange)"))
         elif tok_set & {"dhe", "edh", "dh"}:
             comps.append(("dh", None, raw + " (key exchange)"))
-        elif "rsa" in tok_set and "with" in tok_set and toks[1] == "rsa":
-            comps.append(("rsa", None, raw + " (RSA key transport)"))
+        elif ("rsa" in tok_set and "with" in tok_set and toks[1] == "rsa") or static_rsa:
+            comps.append(("rsa", None, raw + " (RSA key transport, no forward secrecy)"))
         if "rsa" in tok_set and ("ecdhe" in tok_set or "dhe" in tok_set or "edh" in tok_set):
             comps.append(("rsa", None, raw + " (authentication)"))
         if "ecdsa" in tok_set:
@@ -609,7 +640,7 @@ def normalize(name, bits=None):
             comps.append((aes, None, raw + " (cipher)"))
         if "chacha20" in tok_set:
             comps.append(("chacha20", None, raw + " (cipher)"))
-        if tok_set & {"3des", "des3"} or ("3des" in c):
+        if tok_set & {"3des", "des3", "cbc3", "ede3"} or ("3des" in c):
             comps.append(("3des", None, raw + " (cipher)"))
         elif "des" in tok_set:
             comps.append(("des", None, raw + " (cipher)"))
@@ -620,6 +651,8 @@ def normalize(name, bits=None):
         if "aria" in tok_set or re.search(r"aria(128|256)", c):
             comps.append(("aria", None, raw + " (cipher)"))
         h = _hash_in(toks, c)
+        if h is None and "sha" in tok_set:
+            h = "sha-1"  # TLS 1.2 suite suffix "SHA" means HMAC-SHA-1
         if h == "sha-1":
             # SHA-1 in a suite name is the HMAC (CBC suites) or PRF; HMAC-SHA-1 is not broken.
             comps.append(("hmac-sha1", None, raw + " (MAC)"))
@@ -809,6 +842,13 @@ def _verdict_for(cid, bits, profile, label):
                 t = f"ML-KEM (FIPS 203), e.g. hybrid X25519MLKEM768; {when}"
             else:
                 t = f"ML-KEM (FIPS 203) / ML-DSA (FIPS 204); {when}"
+        if "key transport" in (label or ""):
+            v["primitive"], v["lane"] = "key-agree", "key-establishment"
+            v["note"] = ("RSA key transport (static-RSA TLS suite): no forward secrecy, so recorded sessions "
+                         "are exposed to harvest-now-decrypt-later.")
+            t = ("Disable static-RSA suites; TLS 1.3 with " +
+                 ("ML-KEM-1024 key establishment per CNSA 2.0" if profile == "nss"
+                  else "hybrid ML-KEM key exchange (e.g. X25519MLKEM768); deprecated after 2030, disallowed after 2035 (IR 8547)"))
         v["cnsa_target"] = t
         v["cite"] = sorted(set(v["cite"] + ["IR8547", "EO14412"]))
         v["deadline_note"] = ("High value assets / high impact systems (EO 14412, M-26-15): key establishment "

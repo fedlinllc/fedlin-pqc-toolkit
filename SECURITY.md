@@ -18,7 +18,7 @@ regular issue and cite the primary source. Confirmed changes are logged in `CORR
 
 ## Design commitments
 
-- The toolkit reads public certificate metadata, object names and effective configuration only. It
-  never reads private keys or secret values, and secret-hygiene findings report locations, never values.
+- What each mode reads, and the privilege it needs, is listed in the README under "Access by mode".
+  Secret-hygiene findings report locations, never values.
 - Hostnames passed to `--endpoints` are validated and shell-quoted before use.
-- All downloads are pinned and checksum-verified (`toolkit.lock`).
+- Tool downloads are pinned and checksum-verified (`toolkit.lock`); the README lists the exceptions.

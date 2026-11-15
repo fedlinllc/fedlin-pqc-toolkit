@@ -16,8 +16,7 @@ what cryptography they run and how they plan to migrate it.
   targets, NIST SP 800-53 controls with an optional regime crosswalk, certificate renewal exposure,
   and transport posture.
 
-It reads public certificate metadata, object names and effective configuration. It never reads a
-private key or a secret value.
+What each mode can read is set out under [Access by mode](#access-by-mode).
 
 ## Quick start: scan your TLS endpoints
 
@@ -74,12 +73,30 @@ determination.
 - **AI/ML-BOM:** `scripts/ai_detector.py` inventories models, datasets and pipelines with NIST AI RMF,
   ISO/IEC 42001 and EU AI Act references.
 
+## Access by mode
+
+| Mode | What it reads | Privilege |
+|---|---|---|
+| Endpoints (`--endpoints`) | The TLS handshake and the server's public certificate | None |
+| Cluster | Route/ingress objects; TLS and SealedSecret objects are counted, values are not printed | Cluster-wide `list` on secrets (an ISSO should treat this as read access to secrets) |
+| `--deep` | FIPS settings on nodes via a short-lived debug pod | Node debug (privileged pod) |
+| Local SSH | `sshd -T` effective configuration | `sudo`; sshd loads the host keys in its own process |
+| Source (`--repo`, `--theia-dir`) | Files in the directories you name, which can include key files | Read access to those files |
+| Windows / AD CS | Certificate stores and CA templates | An account that can read the stores and query the CA |
+
+Some CBOM entries are inferred rather than observed (for example, the SealedSecrets controller key is
+recorded from a count of SealedSecret objects); they carry `fedlin:evidence` = `inferred`.
+
 ## FIPS-mode scan hosts
 
 OpenSSL in FIPS mode will not offer X25519MLKEM768, so a FIPS host cannot observe the most common
 post-quantum key exchange. `setup.sh` builds a small probe image (Alpine pinned by digest, OpenSSL
 3.5.9) that the pipeline uses automatically on such hosts. Without it, anything the scan could not
-observe is recorded as `unknown`, never guessed.
+observe is recorded as `unknown`, never guessed, and the report is marked **Incomplete** with no letter
+grade.
+
+The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. It does not
+test whether the same endpoint still accepts classical-only clients.
 
 ## Known limits
 
@@ -94,6 +111,10 @@ Stated so a result is not read as more than it is:
   been run end to end through the policy stage.
 - CycloneDX 1.6 output is read as a legacy carrier by the PKIC validator; CycloneDX 2.0 export follows
   the 2.0 release.
+- The PKI Consortium CBOM profiles are working-group drafts (`pkic.example` identifiers). "Conforms" means
+  the vendored validator reports CONFORMS for the entry profile at the pinned commit.
+- `setup.sh` targets Linux x86-64. Podman is needed for the probe image and cbomkit-theia; without it
+  setup skips both and endpoint scans fall back as described above.
 
 ## Tests
 
@@ -106,8 +127,10 @@ Standard library only and offline. The suite includes the PKI Consortium CBOM va
 
 ## Supply chain
 
-Every download is pinned: tool versions and SHA-256 sums in `toolkit.lock`, base images by digest,
-pnpm by version and sha512. A mismatch stops setup or the image build.
+Tool downloads are pinned with SHA-256 sums in `toolkit.lock`, base images by digest, and pnpm by
+version and sha512 (verified through corepack). A mismatch stops setup or the image build. Exceptions:
+OS packages inside the toolkit image come from the UBI 9 repositories at build time. `--deep` uses the cluster's own debug
+image on OpenShift; elsewhere it needs `--debug-image`, which you should pin by digest.
 
 ## Acknowledgements
 

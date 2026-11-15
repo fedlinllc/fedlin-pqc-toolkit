@@ -36,7 +36,11 @@ WORKDIR /opt/toolkit
 COPY package.json pnpm-lock.yaml ./
 # ubi9/nodejs-22-minimal ships npm but NOT corepack, so bootstrap the pnpm CLI with npm (that only
 # fetches the pnpm binary — pnpm still installs the project deps from pnpm-lock.yaml, off the lockfile).
-RUN npm install -g pnpm@10.34.9 \
+# The pnpm tarball is checked against the sha512 pinned in package.json "packageManager".
+RUN want="$(sed -n 's/.*"packageManager": *"pnpm@10.34.9+sha512\.\([0-9a-f]*\)".*/\1/p' package.json)" \
+ && curl -sSfL -o /tmp/pnpm.tgz https://registry.npmjs.org/pnpm/-/pnpm-10.34.9.tgz \
+ && echo "$want  /tmp/pnpm.tgz" | sha512sum -c - \
+ && npm install -g /tmp/pnpm.tgz \
  && pnpm install --prod --frozen-lockfile \
  && pnpm store prune \
  && npm cache clean --force \
@@ -46,6 +50,8 @@ COPY README.md ./
 RUN mkdir -p /opt/toolkit/out && chmod -R a+rwX /opt/toolkit/out
 
 ENV PATH="/opt/toolkit/node_modules/.bin:${PATH}"
+# Run as the base image's unprivileged user.
+USER 1001
 # tool paths are baked; caller supplies --out/--name/--repo/--theia-dir/... plus KUBECONFIG
 ENTRYPOINT ["python3", "scripts/tier2_pipeline.py", \
             "--cyclonedx", "/usr/local/bin/cyclonedx", \

@@ -156,3 +156,29 @@ Found by running real-world identifiers through `classify()` (now `tests/test_ru
   URL and SHA-256 (from the mirror's `sha256sum.txt`); both base images by digest; pnpm 10.34.9 pinned
   in `package.json` `packageManager` with its sha512 (corepack verifies it); installs are
   `--frozen-lockfile` only. A checksum mismatch aborts setup or the image build.
+
+## 2026-11-15: ruleset 1.0.1 and report corrections (adversarial review of the public tree)
+
+- **SSH ML-KEM hybrids over NIST curves.** Was: `mlkem1024nistp384-sha384` and `mlkem768nistp256-sha256`
+  classified as quantum-vulnerable EC (High), and under `nss` told to migrate to ML-KEM-1024, the
+  algorithm already in use. Now: quantum-resistant hybrids; `mlkem1024nistp384-sha384` is compliant under
+  both profiles, `mlkem768nistp256-sha256` under `civilian`. Any other ML-KEM hybrid name is judged by
+  its ML-KEM component, never by its classical half. `X448MLKEM1024` is named as a hybrid.
+- **Static-RSA TLS suites.** Was: OpenSSL suite names with RSA key transport (`AES256-SHA`,
+  `AES128-GCM-SHA256`) were read as plain AES and scored compliant. Now: RSA key transport with no
+  forward secrecy, quantum-vulnerable (High) in the key-establishment lane; the TLS interface records
+  `keyExchange` = RSA. `DES-CBC3-SHA` is 3DES, not DES. Suite suffix `SHA` is recorded as HMAC-SHA-1.
+- **Unobserved key exchange.** Was: a scan that could not observe key exchange (FIPS host without the
+  probe image) scored only the certificates and could print 0/100, grade F, "almost entirely
+  quantum-vulnerable", for a site negotiating X25519MLKEM768. Now: the report is marked Incomplete,
+  says how many endpoints were unobserved, and gives no letter grade.
+- **Regulatory text in the report.** Was: credited NSM-10 with the 2030/2031 deadlines; said M-26-15
+  supersedes M-23-02; listed SLH-DSA in CNSA 2.0 and called CNSA 2.0 "cited in every target" under the
+  civilian profile; called every input CBOM "schema-validated". Now: deadlines attributed to EO 14412
+  and OMB M-26-15 (NSM-10 only defines high-impact system); no supersession claim; CNSA 2.0 listed as
+  ML-KEM-1024, ML-DSA-87, LMS/XMSS, AES-256, SHA-384/512; "schema-validated" removed.
+- **Access and supply-chain claims.** Was: README said the toolkit never reads a private key or secret
+  value, and that every download is pinned. Now: an "Access by mode" table states what each mode reads
+  and the privilege it needs; the SealedSecrets key is marked inferred. `--deep` on non-OpenShift no
+  longer defaults to an unpinned `busybox` (`--debug-image` required); the npm fallback for pnpm checks
+  the tarball's sha512; the toolkit image runs as an unprivileged user; podman is optional in setup.

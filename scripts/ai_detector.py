@@ -215,7 +215,7 @@ def main():
     ap.add_argument("--name", default="ai-system", help="system name for the BOM metadata")
     ap.add_argument("--regime", default="", help="sector crosswalk: FISMA|CMMC|HIPAA|PCI-DSS|GLBA|NERC-CIP")
     ap.add_argument("--report", action="store_true", help="also emit the AI governance report (<out>.report.md)")
-    ap.add_argument("--self-serve", action="store_true", help="gated Tier-0 report variant")
+    ap.add_argument("--self-serve", action="store_true", help="gated automated-scan variant")
     ap.add_argument("--validate", action="store_true", help="validate the AI-BOM (needs --cyclonedx)")
     ap.add_argument("--cyclonedx", default="", help="path to cyclonedx-cli for --validate")
     args = ap.parse_args()

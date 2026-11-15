@@ -67,7 +67,7 @@ def classify(asset):
                 ["Annex IV(2)(g) — cybersecurity measures"], ["SI-7", "SR-4"]))
         elif fmt in SAFE_FORMATS:
             findings.append(_finding(
-                "Low", f"Safe-tensor / non-executing format (.{fmt}).",
+                "Low", f"safetensors / non-executing format (.{fmt}).",
                 ["MEASURE-2.7 (security & resilience)"], ["ISO 42001 A.6.2.6"],
                 ["Annex IV(2)(g) — cybersecurity measures"], ["SI-7"]))
 

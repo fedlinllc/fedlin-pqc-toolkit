@@ -11,7 +11,7 @@
     This script is the hardware complement to collect-windows.ps1, which collects
     cryptographic assets (certs, AD CS, Schannel cipher suites). Run both.
 
-    SECRET-SAFE BY CONSTRUCTION: reads Win32_OperatingSystem, Get-Tpm, tpmtool
+    READS NO SECRETS, BY CONSTRUCTION: reads Win32_OperatingSystem, Get-Tpm, tpmtool
     getdeviceinformation, service display names, and known PKCS#11 DLL install paths.
     Never reads private keys, certificate private-key material, PKCS#11 session state,
     or TPM key hierarchies. Do not add Get-PfxData, export, or credential reads here.

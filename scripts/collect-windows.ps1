@@ -8,7 +8,7 @@
   straight into the toolkit via `--merge-cbom` (the universal overlay then applies CNSA 2.0
   verdicts to everything it emits).
 
-  SECRET-SAFE BY CONSTRUCTION: reads PUBLIC certificate metadata (subject/issuer/validity/
+  READS NO SECRETS, BY CONSTRUCTION: reads PUBLIC certificate metadata (subject/issuer/validity/
   public-key algorithm/size/signature algorithm), Schannel protocol + cipher-suite policy, and
   AD-CS CA configuration ONLY. It never exports a private key or a secret value. Do not add
   Export-PfxCertificate, private-key export, or credential reads here.

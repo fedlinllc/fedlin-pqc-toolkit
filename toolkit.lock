@@ -26,16 +26,15 @@ image           = localhost/fedlin-kex-probe:0.1   # image id sha256:cdcbf9a46e9
 [image]
 tag             = 0.2        # image ~1.02 GB (was 1.66 GB); air-gap bundle ~433 MB (was ~809 MB)
 
-[core-ip]
-cnsa20_ruleset  = 1.0.0      # scripts/cnsa20_ruleset.py (tests: tests/test_ruleset.py; changes: CORRECTIONS.md)
+[components]
+cnsa20_ruleset  = 1.0.1      # scripts/cnsa20_ruleset.py (tests: tests/test_ruleset.py; changes: CORRECTIONS.md)
 crosswalk       = 0.1        # scripts/crosswalk.py (800-53 -> CMMC/HIPAA/PCI/GLBA/NERC/FISMA)
-report          = 0.4        # scripts/report.py (scorecard + roadmap; self-serve; secret-hygiene split; capability marks)
-delta           = 0.1        # scripts/delta.py (baseline diff -> continuous-monitoring evidence)
-pipeline        = 0.5        # scripts/tier2_pipeline.py (+universal overlay/no-runtime/self-serve/merge-cbom/exclude/dep-crypto)
+report          = 0.4        # scripts/report.py (scorecard; secret-hygiene split; capability marks)
+pipeline        = 0.5        # scripts/tier2_pipeline.py (overlay/no-runtime/merge-cbom/exclude/dep-crypto)
 
 [source-scan]
 # CBOMkit + sonar-cryptography wired via the merge-ingest side-car (run out-of-band, --merge-cbom).
 # Not pinned into the OCI image on purpose — it's a compose+DB service; embedding it would break
-# the portable single-container / air-gap / Mode-C design. Driven by scripts/run-cbomkit.sh.
+# the portable single-container / air-gap design. Driven by scripts/run-cbomkit.sh.
 cbomkit         = external   # github.com/PQCA/cbomkit (compose: make production; API :8081)
 sonar-cryptography = external  # CBOMkit-hyperion scanner (Java/Python/Go source)

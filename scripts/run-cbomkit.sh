@@ -4,9 +4,9 @@
 # WHY OUT-OF-BAND: CBOMkit (github.com/PQCA/cbomkit) is a compose SERVICE — Quarkus/Java
 # backend + Vue frontend + PostgreSQL, ports 8001/8081, scanner = sonar-cryptography
 # (Java/Python/Go source). Baking that stack into fedlin-pqc-toolkit would break the
-# flagship's single-container / air-gap / Mode-C properties. Instead we run CBOMkit
+# toolkit's single-container / air-gap properties. Instead we run CBOMkit
 # separately and feed its CBOM into the portable pipeline via --merge-cbom, where it
-# gets the universal CNSA 2.0 overlay + scorecard/roadmap/delta like any other source.
+# gets the same policy stage and report as any other source.
 #
 # PREREQ: a running CBOMkit. From a CBOMkit checkout:  make production            (docker)
 #                                                       make production ENGINE=podman
@@ -17,7 +17,7 @@
 #         POLL_TIMEOUT  (default 600 seconds)
 #
 # OUTPUT: writes the CycloneDX CBOM to <out.json> (default cbomkit-cbom.json), then:
-#   python3 scripts/tier2_pipeline.py --self-serve --merge-cbom cbomkit-cbom.json \
+#   python3 scripts/tier2_pipeline.py --merge-cbom cbomkit-cbom.json \
 #     --out out/scan.json --name "<app>" --validate
 #
 # NOTE: authored against the documented CBOMkit REST API (POST /api/v1/scan;
@@ -84,5 +84,5 @@ fi
 
 n="$(jq '[.components[]? | select(.type=="cryptographic-asset")] | length' "$OUT")"
 echo "[ok] wrote $OUT — $n cryptographic-asset component(s)" >&2
-echo "[next] python3 scripts/tier2_pipeline.py --self-serve --merge-cbom $OUT \\" >&2
+echo "[next] python3 scripts/tier2_pipeline.py --merge-cbom $OUT \\" >&2
 echo "         --out out/scan.json --name \"<app>\" --validate" >&2

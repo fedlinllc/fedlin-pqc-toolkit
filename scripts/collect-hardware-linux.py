@@ -10,7 +10,7 @@ Run on each Linux host in scope — directly or via SSH:
     python3 collect-hardware-linux.py --host fileserver.example.gov --pretty
     ssh root@host python3 < collect-hardware-linux.py -- --host host.example.gov
 
-SECRET-SAFE BY CONSTRUCTION: reads /etc/os-release, /sys/class/tpm/ sysfs (public
+READS NO SECRETS, BY CONSTRUCTION: reads /etc/os-release, /sys/class/tpm/ sysfs (public
 TPM metadata), process names (ps -e comm), and OpenSSL version strings. Never reads
 private keys, certificate material, PKCS#11 session state, or TPM key hierarchies.
 

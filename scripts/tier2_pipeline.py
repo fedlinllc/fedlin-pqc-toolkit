@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """FEDLIN PQC Toolkit — runtime and endpoint capture -> CycloneDX 1.6 CBOM.
 
-Closes runbook build-item 6a: live-endpoint/SSH/config crypto has no turnkey
-CycloneDX generator, so this converts secret-safe runtime captures into a valid,
-tool-generated CBOM (validated with cyclonedx-cli) and applies the CNSA 2.0 overlay.
+Live-endpoint, SSH and cluster-configuration cryptography has no turnkey CycloneDX
+generator, so this converts runtime captures into a tool-generated CBOM (optionally
+validated with cyclonedx-cli). Verdicts are made separately by policy.py.
 
-SECRET-SAFE BY CONSTRUCTION: reads public certificate metadata (openssl), object
-NAMES/counts (oc go-template over keys, field-selectors), and sshd effective config
-only. It never reads a private key or a secret VALUE. Do not add `-o yaml/json`,
-`.data` dereferences, or `oc extract` here.
+Capture rules: cluster capture reads object NAMES and counts (go-templates over keys,
+field-selectors), never secret values. Do not add `-o yaml/json`, `.data` dereferences
+or `oc extract` here. What each mode can read is listed in the README ("Access by mode").
 
 Usage:  python3 tier2_pipeline.py --out out/cbom.json [--validate ./bin/cyclonedx]
 """
@@ -56,7 +55,7 @@ def run(cmd, timeout=25):
         return ""
 
 
-# ---------- capture (secret-safe) ----------
+# ---------- capture (no secret values read) ----------
 
 def detect_platform(kube="oc"):
     """Return 'openshift', 'kubernetes', or 'unreachable'.
@@ -302,7 +301,7 @@ def capture_ingress(kube="kubectl"):
     """Live TLS capture over generic-kubernetes Ingress hosts (the non-OpenShift Route analogue).
 
     Reads Ingress rule hosts and TLS hosts (public object fields only), then does the same
-    secret-safe public-certificate handshake capture as the Route path. Works on any k8s
+    public-certificate handshake capture as the Route path. Works on any k8s
     (EKS/GKE/AKS/k3s) with an Ingress controller.
     """
     rule_hosts = run(f"{kube} get ingress -A -o jsonpath='{{range .items[*]}}{{range .spec.rules[*]}}{{.host}}{{\"\\n\"}}{{end}}{{end}}'")
@@ -352,7 +351,7 @@ def capture_endpoints(hosts, workers=16):
     """Live TLS cert capture over an explicit host[:port] list (no cluster needed).
 
     Reuses capture_cert (public certificate metadata only — never a private key or secret value),
-    so it inherits the same secret-safe contract as the cluster-route path.
+    so it inherits the same no-secret-values contract as the cluster-route path.
 
     Parallelized: the per-host cost is an I/O-bound openssl handshake (and unreachable hosts sit
     on an 8s timeout), so a serial scan of an estate-sized list ran for hours. A bounded thread
@@ -396,7 +395,7 @@ def _int(s):
         return 0
 
 
-def capture_fips(kube="oc", platform="openshift"):
+def capture_fips(kube="oc", platform="openshift", debug_image=""):
     """Best-effort node FIPS check. INTRUSIVE — spins a short-lived debug pod; gated behind --deep.
 
     Uses `oc debug node` on OpenShift; falls back to `kubectl debug node` (k8s 1.20+) elsewhere.
@@ -408,8 +407,11 @@ def capture_fips(kube="oc", platform="openshift"):
         v = run(f"{kube} debug node/{node} --to-namespace=default -q -- "
                 f"chroot /host cat /proc/sys/crypto/fips_enabled", timeout=90).strip()
     else:
-        # kubectl debug node mounts the host FS at /host in an ephemeral pod
-        v = run(f"{kube} debug node/{node} -q --image=busybox -- "
+        # kubectl debug node needs an image. No default: an unpinned image in a privileged node pod is
+        # exactly what this toolkit flags elsewhere, so the operator names one, pinned by digest.
+        if not debug_image:
+            return "not checked (non-OpenShift --deep needs --debug-image <image@sha256:...>)"
+        v = run(f"{kube} debug node/{node} -q --image={shlex.quote(debug_image)} -- "
                 f"cat /host/proc/sys/crypto/fips_enabled", timeout=90).strip()
     return {"1": "enabled", "0": "disabled"}.get(v, "unknown")
 
@@ -586,7 +588,11 @@ class CBOM:
             return cnsa.registry_name(n, None, curve_bits)[1] or n
         cb = self._cert_bits.get(host)
         auth = [reg(n, cb) for r, n in cert if cnsa.registry_name(n, None, cb)[1]] or [n for _, n in cert]
-        facts = {"keyExchange": [reg(kex_group)] if kex_group else [],
+        kex_fact = [reg(kex_group)] if kex_group else []
+        if not kex_fact and cipher and cnsa.classify(cipher)["note"].startswith("RSA key transport"):
+            # Static-RSA suite: the key exchange is RSA key transport, known from the suite itself.
+            kex_fact = ["RSA"]
+        facts = {"keyExchange": kex_fact,
                  "encryption": [reg(cipher)] if cipher else [],
                  "authentication": auth}
         for attr, vals in facts.items():
@@ -635,7 +641,9 @@ class CBOM:
                                      "type": "private-key", "algorithmRef": key_ref, "state": "active"}},
             "properties": [
                 {"name": "fedlin:sealed_secret_crs", "value": str(count)},
-                {"name": "fedlin:hndl_exposure", "value": "RSA-wrapped ciphertext committed to version control"},
+                {"name": "fedlin:evidence", "value": "inferred (controller key assumed RSA-4096 from the "
+                                                     "SealedSecret object count; key not read)"},
+                {"name": "fedlin:hndl_exposure", "value": "RSA-wrapped ciphertext (SealedSecrets are usually committed to version control)"},
             ],
         })
         self.dependencies.append({"ref": ref, "dependsOn": [key_ref]})
@@ -805,8 +813,8 @@ def overlay_untagged(doc, regime=None):
 
 def fallback_cert_scan(theia_dir, doc, openssl_bin="openssl"):
     """Supplement cbomkit-theia, which silently DROPS certificates whose public-key
-    OID it can't parse (EdDSA/RFC 8410; ML-DSA/SLH-DSA/2024 OIDs — confirmed by scrim
-    Stratum A). Parse those with OpenSSL 3.5 (which recognizes them) and add algorithm
+    OID it can't parse (EdDSA/RFC 8410; ML-DSA/SLH-DSA/2024 OIDs — confirmed in lab
+    testing). Parse those with OpenSSL 3.5 (which recognizes them) and add algorithm
     crypto-assets so the overlay classifies them. RSA/EC/DSA are already captured by
     theia and skipped here (no double-count)."""
     import glob as _glob
@@ -940,7 +948,7 @@ def main():
     ap.add_argument("--out", default="out/cbom.json")
     ap.add_argument("--name", default="openshift-cluster")
     ap.add_argument("--repo", default="", help="optional source repo/dir -> cdxgen dependency SBOM, merged in")
-    ap.add_argument("--theia-dir", default="", help="optional dir -> cbomkit-theia cert/key/secret scan, merged in")
+    ap.add_argument("--theia-dir", default="", help="optional dir -> cbomkit-theia scan (certificates, keys, secret-hygiene findings; may read key files), merged in")
     ap.add_argument("--theia-image", default="", help="optional container image ref -> cbomkit-theia scan, merged in")
     ap.add_argument("--cdxgen", default="", help="path to cdxgen (default: ../node_modules/.bin/cdxgen)")
     ap.add_argument("--theia", default="", help="path to cbomkit-theia (default: ../bin/cbomkit-theia)")
@@ -959,6 +967,8 @@ def main():
                     help="annotate assets with a regime crosswalk: FISMA|CMMC|HIPAA|PCI-DSS|GLBA|NERC-CIP")
     ap.add_argument("--deep", action="store_true",
                     help="run intrusive checks (FIPS via oc/kubectl debug node — spins a short-lived pod)")
+    ap.add_argument("--debug-image", default="",
+                    help="image for --deep on non-OpenShift clusters (kubectl debug node); pin by digest")
     ap.add_argument("--kube-cli", default="oc",
                     help="kubernetes CLI for runtime capture: oc (OpenShift) or kubectl (EKS/GKE/AKS/k3s). "
                          "Platform is auto-detected; on non-OpenShift, Route capture becomes Ingress capture.")
@@ -1075,7 +1085,7 @@ def main():
         counts = capture_counts(kube)
         ssh = capture_ssh()
         ctx.update({"tls_secret_count": counts["tls_secrets"], "sealed_secret_count": counts["sealed_secrets"]})
-        ctx["fips"] = capture_fips(kube, platform) if args.deep else "not checked (use --deep)"
+        ctx["fips"] = capture_fips(kube, platform, args.debug_image) if args.deep else "not checked (use --deep)"
     if args.regime:
         ctx["regime"] = args.regime
     ctx["profile"] = args.profile

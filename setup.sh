@@ -18,8 +18,18 @@ if [ ! -x bin/cyclonedx ] || ! echo "$CYCLONEDX_SHA256  bin/cyclonedx" | sha256s
 fi
 bin/cyclonedx --version
 
+# Podman builds the key-exchange probe image and cbomkit-theia. Both are optional: without podman,
+# endpoint scans still run (unobserved key exchange is reported as unknown) and --theia-dir is unavailable.
+HAVE_PODMAN=0; command -v podman >/dev/null 2>&1 && HAVE_PODMAN=1
+if [ "$HAVE_PODMAN" = 1 ] && ! podman image exists localhost/fedlin-kex-probe:0.1; then
+  echo "building the key-exchange probe image (pinned Alpine + openssl 3.5.9-r0) ..."
+  podman build -q -t localhost/fedlin-kex-probe:0.1 images/kex-probe
+fi
+
 THEIA_COMMIT=1ce8b4d946c699198efe95de287a61832c82dd74   # keep in sync with toolkit.lock
-if [ ! -x bin/cbomkit-theia ]; then
+if [ "$HAVE_PODMAN" = 0 ]; then
+  echo "[warn] podman not found: skipping the key-exchange probe image and cbomkit-theia" >&2
+elif [ ! -x bin/cbomkit-theia ]; then
   echo "building cbomkit-theia (static Go binary via podman) ..."
   tmp="$(mktemp -d)"
   git clone https://github.com/PQCA/cbomkit-theia "$tmp/theia"
@@ -31,12 +41,7 @@ if [ ! -x bin/cbomkit-theia ]; then
   chmod +x bin/cbomkit-theia
   rm -rf "$tmp"
 fi
-bin/cbomkit-theia --help >/dev/null && echo "cbomkit-theia: ok"
-
-if command -v podman >/dev/null 2>&1 && ! podman image exists localhost/fedlin-kex-probe:0.1; then
-  echo "building the key-exchange probe image (pinned Alpine + openssl 3.5.9-r0) ..."
-  podman build -q -t localhost/fedlin-kex-probe:0.1 images/kex-probe
-fi
+[ -x bin/cbomkit-theia ] && bin/cbomkit-theia --help >/dev/null && echo "cbomkit-theia: ok"
 
 echo "installing node deps (cdxgen + @noble/post-quantum signer) via pnpm ..."
 # pnpm is pinned in package.json "packageManager" (exact version + sha512, verified by corepack).
@@ -45,7 +50,14 @@ if command -v corepack >/dev/null 2>&1; then
   corepack enable pnpm
   PNPM="corepack pnpm"
 else
-  npm install -g pnpm@10.34.9
+  # No corepack: fetch the same pnpm tarball and check it against the sha512 in package.json.
+  want="$(sed -n 's/.*"packageManager": *"pnpm@10.34.9+sha512\.\([0-9a-f]*\)".*/\1/p' package.json)"
+  tmp="$(mktemp -d)"
+  curl -sSfL -o "$tmp/pnpm.tgz" https://registry.npmjs.org/pnpm/-/pnpm-10.34.9.tgz
+  echo "$want  $tmp/pnpm.tgz" | sha512sum -c --quiet - \
+    || { echo "pnpm sha512 mismatch; refusing to install" >&2; rm -rf "$tmp"; exit 1; }
+  npm install -g "$tmp/pnpm.tgz"
+  rm -rf "$tmp"
   PNPM="pnpm"
 fi
 $PNPM install --prod --frozen-lockfile
