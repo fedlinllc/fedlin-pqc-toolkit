@@ -1,4 +1,4 @@
-# fedlin-pqc-toolkit — pinned versions (v0.4.3)
+# fedlin-pqc-toolkit — pinned versions (v0.5.0)
 # Reproducibility manifest. Update deliberately; the OCI image + setup.sh should match these.
 # Format: component = version/ref (source)
 
@@ -38,3 +38,11 @@ pipeline        = 0.5        # scripts/tier2_pipeline.py (overlay/no-runtime/mer
 # the portable single-container / air-gap design. Driven by scripts/run-cbomkit.sh.
 cbomkit         = external   # github.com/PQCA/cbomkit (compose: make production; API :8081)
 sonar-cryptography = external  # CBOMkit-hyperion scanner (Java/Python/Go source)
+
+[cmvp-snapshot]
+# NIST CMVP validated-modules pages, curated families only (scripts/cmvp.py). Refreshed deliberately at
+# release time with `python3 scripts/cmvp.py snapshot --out data/cmvp/cmvp-YYYY-MM-DD.json`; never fetched
+# during a scan.
+file            = data/cmvp/cmvp-2026-11-15.json
+sha256          = d8e5e6fd10d119241262c6afff6f1cc09d3409567ed2c048dbd7991e3ec40b16
+certificates    = 40 of 754 listed

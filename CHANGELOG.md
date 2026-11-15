@@ -11,6 +11,20 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-15
+
+### Added
+- FIPS 140-3 (CMVP) check in the report: each detected implementation (distribution OpenSSL, BC-FJA,
+  AWS-LC, BoringCrypto, wolfCrypt, Go Cryptographic Module, Luna/nShield/YubiHSM HSMs) is listed with its
+  active candidate certificates, sunset dates and approved post-quantum algorithms, from a dated, pinned
+  snapshot of NIST's CMVP pages (`scripts/cmvp.py`, `data/cmvp/`). Libraries with no validated module are
+  named. Summary JSON gains `cmvp`.
+- The Linux host collector records `fedlin:os_id`, `fedlin:os_version_id` and `fedlin:fips_enabled`.
+
+### Fixed
+- A missing cyclonedx-cli no longer crashes `--merge-cbom` or `--validate`; the pipeline warns that merged
+  inputs were dropped.
+
 ## [0.4.3] - 2026-11-15
 
 Ruleset 1.0.2. Details and sources in [CORRECTIONS.md](CORRECTIONS.md).
@@ -87,7 +101,8 @@ First public release.
 - Key-exchange probe image so a FIPS scan host can observe X25519MLKEM768.
 - Pinned, checksum-verified downloads; CI with tests and Gitleaks.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.0...v0.4.1

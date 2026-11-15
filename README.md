@@ -98,6 +98,21 @@ grade.
 The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. It does not
 test whether the same endpoint still accepts classical-only clients.
 
+## FIPS 140-3 validation (CMVP)
+
+The report checks each cryptographic implementation the CBOM records against a dated snapshot of NIST's
+CMVP validated-modules pages (`data/cmvp/`, pinned in `toolkit.lock`): distribution OpenSSL builds
+(from `scripts/collect-hardware-linux.py`, which records the OS release and FIPS mode), libraries from
+`--repo` (BC-FJA, AWS-LC, BoringCrypto, wolfCrypt, the Go Cryptographic Module), and HSMs. For each it lists
+active certificates, their sunset dates, and whether the certificate approves ML-KEM, ML-DSA or SLH-DSA.
+Libraries with no validated module (PyPI `cryptography` wheels, `bcprov`, pure-JavaScript crypto) are
+named as such.
+
+A listed certificate is a **candidate**, not a validation claim: a certificate covers specific versions
+and operating environments in approved mode, which only its Security Policy shows. An endpoint scan alone
+cannot see the server's implementation. The snapshot is refreshed deliberately at release time
+(`python3 scripts/cmvp.py snapshot --out data/cmvp/cmvp-YYYY-MM-DD.json`); scans never contact NIST.
+
 ## Known limits
 
 Stated so a result is not read as more than it is:

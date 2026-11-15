@@ -64,6 +64,7 @@ RUN want="$(sed -n 's/.*"packageManager": *"pnpm@10.34.9+sha512\.\([0-9a-f]*\)".
  && npm cache clean --force \
  && rm -rf /root/.npm /root/.cache /root/.local/share/pnpm/store /tmp/*
 COPY scripts ./scripts
+COPY data/cmvp ./data/cmvp
 COPY README.md ./
 RUN mkdir -p /opt/toolkit/out && chmod -R a+rwX /opt/toolkit/out
 

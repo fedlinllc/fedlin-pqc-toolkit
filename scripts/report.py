@@ -33,6 +33,8 @@ try:
 except ImportError:
     _whitelabel = None
 
+import cmvp as _cmvp  # FIPS 140-3 (CMVP) candidates from the dated snapshot in data/cmvp/
+
 PRIORITY_ORDER = {"Critical": 0, "High": 1, "Low": 2, "None": 3, "Review": 4}
 
 
@@ -791,6 +793,11 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
             L.append(f"| ({n}) | {at.replace('-', ' ')} | — | — | inventory only |")
         L.append("")
 
+    # ---- FIPS 140-3 validation (CMVP) ----
+    cmvp_snap, _ = _cmvp.load_snapshot()
+    cmvp_found = _cmvp.match(bom, cmvp_snap)
+    L.extend(_cmvp.report_lines(cmvp_found, cmvp_snap))
+
     # ---- methodology, scope & limitations ----
     L.append("## Methodology, scope & limitations")
     L.append("")
@@ -888,6 +895,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         "awaiting_review": len(review),
         "other_assets": ocounts,
         "hndl_exposures": len(hndl),
+        "cmvp": _cmvp.summary(cmvp_found, cmvp_snap),
         "secret_hygiene_detections": len(secrets),
         "regime": regime,
         "certificates": cposture["count"],

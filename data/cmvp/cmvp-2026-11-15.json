@@ -1,0 +1,629 @@
+{
+ "fetched": "2026-11-15",
+ "list_rows": 754,
+ "modules": [
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs",
+   "cert": 5586,
+   "level": "1",
+   "module": "OpenSSL FIPS Provider",
+   "pqc_approved": [
+    "ML-DSA",
+    "ML-KEM",
+    "SLH-DSA"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "11/12/2031",
+   "type": "Software",
+   "validated": [
+    "11/13/2026"
+   ],
+   "vendor": "The OpenSSL Corporation"
+  },
+  {
+   "caveat": "When operated in approved mode. The module generates SSPs (e.g., keys) whose strengths are modified by available entropy. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5581,
+   "level": "1",
+   "module": "Go Cryptographic Module",
+   "pqc_approved": [
+    "ML-DSA",
+    "ML-KEM"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "11/12/2031",
+   "type": "Software",
+   "validated": [
+    "11/13/2026"
+   ],
+   "vendor": "Geomys LLC"
+  },
+  {
+   "caveat": "When operated in approved mode. The module generates SSPs (e.g., keys) whose strengths are modified by available entropy. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5573,
+   "level": "1",
+   "module": "Red Hat Enterprise Linux 9 - OpenSSL FIPS Provider",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "10/28/2029",
+   "type": "Software",
+   "validated": [
+    "11/09/2026"
+   ],
+   "vendor": "Red Hat(R), Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs",
+   "cert": 5548,
+   "level": "1",
+   "module": "wolfCrypt",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "10/8/2031",
+   "type": "Software",
+   "validated": [
+    "10/09/2026"
+   ],
+   "vendor": "wolfSSL Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5482,
+   "level": "1",
+   "module": "OpenSSL FIPS Provider for AlmaLinux 9",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "10/6/2029",
+   "type": "Software",
+   "validated": [
+    "08/13/2026"
+   ],
+   "vendor": "Cloudlinux Inc., TuxCare division"
+  },
+  {
+   "caveat": "When installed, initialized and configured as specified in Section 11.1.2 of the Security Policy",
+   "cert": 5450,
+   "level": "3",
+   "module": "Luna T7",
+   "pqc_approved": [
+    "LMS",
+    "ML-DSA",
+    "ML-KEM"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/28/2031",
+   "type": "Hardware",
+   "validated": [
+    "07/29/2026"
+   ],
+   "vendor": "Thales Trusted Cyber Technologies"
+  },
+  {
+   "caveat": "When operated in approved mode. When installed, initialized and configured as specified in Section 11.1 of the Security Policy. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5438,
+   "level": "1",
+   "module": "Amazon Linux 2023 OpenSSL FIPS Provider",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/26/2031",
+   "type": "Software",
+   "validated": [
+    "07/27/2026"
+   ],
+   "vendor": "Amazon Web Services, Inc."
+  },
+  {
+   "caveat": "When installed, initialized and configured as specified in Section 11 of the Security Policy. When operated in approved mode. No assurance of minimum security of SSPs (e.g. keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5436,
+   "level": "1",
+   "module": "SUSE Linux Enterprise OpenSSL Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/11/2029",
+   "type": "Software",
+   "validated": [
+    "07/26/2026"
+   ],
+   "vendor": "SUSE, LLC"
+  },
+  {
+   "caveat": "When operated in approved mode. When installed, initialized and configured as specified in Section 11.1 of the Security Policy. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SS",
+   "cert": 5429,
+   "level": "1",
+   "module": "AWS-LC Cryptographic Module (dynamic)",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "8/13/2029",
+   "type": "Software",
+   "validated": [
+    "07/20/2026"
+   ],
+   "vendor": "Amazon Web Services Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5373,
+   "level": "1",
+   "module": "TuxCare OpenSSL FIPS Provider",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/6/2031",
+   "type": "Software",
+   "validated": [
+    "07/07/2026"
+   ],
+   "vendor": "Cloud Linux Software, Inc. d/b/a TuxCare"
+  },
+  {
+   "caveat": "When installed, initialized and configured as specified in Section 11.3 of the Security Policy",
+   "cert": 5329,
+   "level": "3",
+   "module": "nShield 5s Hardware Security Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "8/18/2029",
+   "type": "Hardware",
+   "validated": [
+    "06/15/2026"
+   ],
+   "vendor": "Entrust Corporation"
+  },
+  {
+   "caveat": "When operated in approved mode. When installed, initialized and configured as specified in Section 11.1 of the Security Policy. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SS",
+   "cert": 5314,
+   "level": "1",
+   "module": "AWS-LC 3 Cryptographic Module (static)",
+   "pqc_approved": [
+    "ML-KEM"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "6/4/2031",
+   "type": "Software",
+   "validated": [
+    "06/05/2026"
+   ],
+   "vendor": "Amazon Web Services, Inc"
+  },
+  {
+   "caveat": "When operated in approved mode; When installed, initialized and configured as specified in Section 11.1 of the Security Policy; No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5302,
+   "level": "3",
+   "module": "YubiHSM 2 Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "6/2/2031",
+   "type": "Hardware",
+   "validated": [
+    "06/03/2026"
+   ],
+   "vendor": "Yubico, Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. The module generates SSPs (e.g., keys) whose strengths are modified by available entropy. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5300,
+   "level": "3",
+   "module": "Luna M7 Cryptographic Module",
+   "pqc_approved": [
+    "LMS"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "6/2/2031",
+   "type": "Hardware",
+   "validated": [
+    "06/03/2026"
+   ],
+   "vendor": "Thales Trusted Cyber Technologies"
+  },
+  {
+   "caveat": "When operated in approved mode. When installed, initialized and configured as specified in Section 11.1 of the Security Policy. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SS",
+   "cert": 5298,
+   "level": "1",
+   "module": "AWS-LC 3 Cryptographic Module (dynamic)",
+   "pqc_approved": [
+    "ML-KEM"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "6/2/2031",
+   "type": "Software",
+   "validated": [
+    "06/03/2026"
+   ],
+   "vendor": "Amazon Web Services, Inc"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5296,
+   "level": "1",
+   "module": "BoringCrypto",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "1/26/2030",
+   "type": "Software",
+   "validated": [
+    "06/02/2026"
+   ],
+   "vendor": "Google, LLC"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs",
+   "cert": 5294,
+   "level": "1",
+   "module": "Oracle Linux 9 OpenSSL FIPS Provider",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "8/24/2029",
+   "type": "Software",
+   "validated": [
+    "06/01/2026"
+   ],
+   "vendor": "Oracle Corporation"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5247,
+   "level": "1",
+   "module": "Go Cryptographic Module",
+   "pqc_approved": [
+    "ML-KEM"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "4/26/2031",
+   "type": "Software",
+   "validated": [
+    "04/27/2026"
+   ],
+   "vendor": "Geomys LLC"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys). No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5244,
+   "level": "1",
+   "module": "BoringCrypto",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "4/17/2031",
+   "type": "Software",
+   "validated": [
+    "04/18/2026"
+   ],
+   "vendor": "Google, LLC"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys).",
+   "cert": 5242,
+   "level": "1",
+   "module": "AWS OpenSSL FIPS Module (based on the OpenSSL FIPS Provider)",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "3/10/2030",
+   "type": "Software",
+   "validated": [
+    "04/14/2026"
+   ],
+   "vendor": "Amazon Web Services, Inc."
+  },
+  {
+   "caveat": "When operated in approved mode and installed, initialized and configured as specified in Section 11 of the Security Policy. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5238,
+   "level": "1",
+   "module": "SUSE Linux Enterprise OpenSSL 1 Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "4/9/2031",
+   "type": "Software",
+   "validated": [
+    "04/10/2026"
+   ],
+   "vendor": "SUSE LLC"
+  },
+  {
+   "caveat": "When operated in approved mode and installed, initialized and configured as specified in Section 11 of the Security Policy. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5200,
+   "level": "1",
+   "module": "Rocky Linux 8 OpenSSL Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "3/17/2031",
+   "type": "Software",
+   "validated": [
+    "03/18/2026"
+   ],
+   "vendor": "Ctrl IQ, Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys)",
+   "cert": 5146,
+   "level": "1",
+   "module": "AWS-LC Cryptographic Module (dynamic)",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "1/25/2031",
+   "type": "Software",
+   "validated": [
+    "01/26/2026"
+   ],
+   "vendor": "Amazon Web Services, Inc"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5116,
+   "level": "1",
+   "module": "Rocky Linux 9 OpenSSL FIPS Provider",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "1/5/2031",
+   "type": "Software",
+   "validated": [
+    "01/06/2026"
+   ],
+   "vendor": "Ctrl IQ, Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5115,
+   "level": "1",
+   "module": "Canonical Ltd. Ubuntu 24.04 OpenSSL Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "1/5/2031",
+   "type": "Software",
+   "validated": [
+    "01/06/2026"
+   ],
+   "vendor": "Canonical Ltd."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys)",
+   "cert": 5104,
+   "level": "1",
+   "module": "BoringCrypto",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "12/8/2030",
+   "type": "Software",
+   "validated": [
+    "12/09/2025"
+   ],
+   "vendor": "Google, LLC"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5096,
+   "level": "1",
+   "module": "SUSE Linux Enterprise OpenSSL 3 Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "11/25/2030",
+   "type": "Software",
+   "validated": [
+    "11/26/2025"
+   ],
+   "vendor": "SUSE LLC"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g. keys).",
+   "cert": 5041,
+   "level": "1",
+   "module": "wolfCrypt",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/17/2030",
+   "type": "Software",
+   "validated": [
+    "07/18/2025"
+   ],
+   "vendor": "wolfSSL Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of minimum security of SSPs (e.g., keys, bit strings) that are externally loaded, or of SSPs established with externally loaded SSPs.",
+   "cert": 5021,
+   "level": "1",
+   "module": "Amazon Linux 2023 OpenSSL FIPS Provider",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "5/25/2030",
+   "type": "Software",
+   "validated": [
+    "05/26/2025"
+   ],
+   "vendor": "Amazon Web Services, Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys).",
+   "cert": 4985,
+   "level": "1",
+   "module": "OpenSSL FIPS Provider",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "3/10/2030",
+   "type": "Software",
+   "validated": [
+    "03/11/2025"
+   ],
+   "vendor": "The OpenSSL Project"
+  },
+  {
+   "caveat": "Interim validation. When operated in approved mode. When installed, initialized and configured as specified in Section 11.2 of the Security Policy",
+   "cert": 4962,
+   "level": "3",
+   "module": "Thales Luna G7 Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "2/6/2027",
+   "type": "Hardware",
+   "validated": [
+    "02/07/2025"
+   ],
+   "vendor": "Thales"
+  },
+  {
+   "caveat": "Interim Validation. When operated in approved mode. The module generates SSPs (e.g., keys) whose strengths are modified by available entropy",
+   "cert": 4943,
+   "level": "1",
+   "module": "BC-FJA (Bouncy Castle FIPS Java API)",
+   "pqc_approved": [
+    "LMS"
+   ],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "1/16/2030",
+   "type": "Software",
+   "validated": [
+    "01/17/2025"
+   ],
+   "vendor": "Legion of the Bouncy Castle Inc."
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys)",
+   "cert": 4816,
+   "level": "1",
+   "module": "AWS-LC Cryptographic Module (static)",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "9/30/2029",
+   "type": "Software",
+   "validated": [
+    "10/01/2024"
+   ],
+   "vendor": "Amazon Web Services Inc."
+  },
+  {
+   "caveat": "Interim validation; When operated in approved mode; When installed, initialized and configured as specified in Section 11 of the Security Policy",
+   "cert": 4794,
+   "level": "1",
+   "module": "Canonical Ltd. Ubuntu 22.04 OpenSSL Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "9/10/2029",
+   "type": "Software",
+   "validated": [
+    "09/11/2024"
+   ],
+   "vendor": "Canonical Ltd."
+  },
+  {
+   "caveat": "When installed, initialized and configured as specified in Section 11.3 of the Security Policy",
+   "cert": 4745,
+   "level": "3",
+   "module": "nShield 5s Hardware Security Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/30/2029",
+   "type": "Hardware",
+   "validated": [
+    "07/31/2024"
+   ],
+   "vendor": "Entrust Corporation"
+  },
+  {
+   "caveat": "When operated in approved mode. No assurance of the minimum strength of generated SSPs (e.g., keys).",
+   "cert": 4743,
+   "level": "1",
+   "module": "BC-FJA (Bouncy Castle FIPS Java API)",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/28/2029",
+   "type": "Software",
+   "validated": [
+    "07/29/2024"
+   ],
+   "vendor": "Legion of the Bouncy Castle Inc."
+  },
+  {
+   "caveat": "No assurance of the minimum strength of generated SSPs (e.g., keys). When operated in approved mode.",
+   "cert": 4735,
+   "level": "1",
+   "module": "BoringCrypto",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/22/2029",
+   "type": "Software",
+   "validated": [
+    "07/23/2024"
+   ],
+   "vendor": "Google, LLC."
+  },
+  {
+   "caveat": "No assurance of the minimum strength of generated SSPs (e.g., keys)",
+   "cert": 4718,
+   "level": "1",
+   "module": "wolfCrypt",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "7/10/2029",
+   "type": "Software",
+   "validated": [
+    "07/11/2024"
+   ],
+   "vendor": "wolfSSL Inc."
+  },
+  {
+   "caveat": "When operated in approved mode",
+   "cert": 4684,
+   "level": "3",
+   "module": "Thales Luna K7 Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "4/1/2029",
+   "type": "Hardware",
+   "validated": [
+    "04/02/2024"
+   ],
+   "vendor": "Thales"
+  },
+  {
+   "caveat": "When operated in approved mode",
+   "cert": 4631,
+   "level": "1",
+   "module": "AWS-LC Cryptographic Module",
+   "pqc_approved": [],
+   "standard": "FIPS 140-3",
+   "status": "Active",
+   "sunset": "10/5/2028",
+   "type": "Software",
+   "validated": [
+    "10/06/2023"
+   ],
+   "vendor": "Amazon Web Services Inc."
+  }
+ ],
+ "scope": "Certificates selected by scripts/cmvp.py FAMILIES; details from each certificate page.",
+ "source": "https://csrc.nist.gov/projects/cryptographic-module-validation-program/validated-modules/search/all"
+}

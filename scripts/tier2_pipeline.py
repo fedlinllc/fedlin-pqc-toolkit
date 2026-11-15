@@ -47,7 +47,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "0.4.3"
+TOOLKIT_VERSION = "0.5.0"
 
 
 def run(cmd, timeout=25):
@@ -925,11 +925,20 @@ def strip_nones(o):
     return o
 
 
+def _cyclonedx(cyclonedx_bin, args):
+    """Run cyclonedx-cli; None (with a warning) when it is not installed."""
+    try:
+        return subprocess.run([cyclonedx_bin, *args], capture_output=True, text=True)
+    except OSError as e:
+        sys.stderr.write(f"[warn] cyclonedx-cli not available ({cyclonedx_bin}: {e.strerror}); run ./setup.sh "
+                         "or pass --cyclonedx\n")
+        return None
+
+
 def convert_bom(cyclonedx_bin, inp, out, version="v1_6"):
-    r = subprocess.run([cyclonedx_bin, "convert", "--input-file", inp,
-                        "--output-file", out, "--output-version", version],
-                       capture_output=True, text=True)
-    return r.returncode == 0
+    r = _cyclonedx(cyclonedx_bin, ["convert", "--input-file", inp, "--output-file", out,
+                                   "--output-version", version])
+    return r is not None and r.returncode == 0
 
 
 def generate_theia_cbom(theia_bin, mode, target, cyclonedx_bin, out):
@@ -958,9 +967,11 @@ def generate_theia_cbom(theia_bin, mode, target, cyclonedx_bin, out):
 
 
 def merge_boms(cyclonedx_bin, inputs, out):
-    r = subprocess.run([cyclonedx_bin, "merge", "--input-files", *inputs,
-                        "--output-file", out, "--output-version", "v1_6"],
-                       capture_output=True, text=True)
+    r = _cyclonedx(cyclonedx_bin, ["merge", "--input-files", *inputs, "--output-file", out,
+                                   "--output-version", "v1_6"])
+    if r is None:
+        sys.stderr.write(f"[warn] {len(inputs) - 1} merged input(s) dropped: the CBOM is runtime-only\n")
+        return False
     if r.returncode != 0:
         sys.stderr.write(f"[warn] merge failed: {r.stderr.strip()}\n")
         return False
@@ -1357,9 +1368,10 @@ def main():
 
     # --- validate ---
     if args.validate:
-        r = subprocess.run([cyclonedx_bin, "validate", "--input-file", args.out,
-                            "--input-version", "v1_6", "--fail-on-errors"],
-                           capture_output=True, text=True)
+        r = _cyclonedx(cyclonedx_bin, ["validate", "--input-file", args.out, "--input-version", "v1_6",
+                                       "--fail-on-errors"])
+        if r is None:
+            sys.exit(2)
         print(r.stdout.strip() or r.stderr.strip())
         sys.exit(r.returncode)
 

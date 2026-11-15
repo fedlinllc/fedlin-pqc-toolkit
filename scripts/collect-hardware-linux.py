@@ -148,6 +148,17 @@ def detect_os(hostname):
     ]
     if openssl_ver:
         props.append({"name": "fedlin:openssl_version", "value": openssl_ver})
+    # Facts the CMVP check needs: distribution identity and whether the kernel runs in FIPS mode.
+    if os_id:
+        props.append({"name": "fedlin:os_id", "value": os_id})
+    if os_version:
+        props.append({"name": "fedlin:os_version_id", "value": os_version})
+    try:
+        fips = pathlib.Path("/proc/sys/crypto/fips_enabled").read_text().strip()
+    except OSError:
+        fips = ""
+    props.append({"name": "fedlin:fips_enabled",
+                  "value": {"1": "true", "0": "false"}.get(fips, "unknown")})
 
     slug = _slugify(hostname)
     return {
