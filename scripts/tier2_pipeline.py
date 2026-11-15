@@ -46,6 +46,10 @@ KIT_FLAGS = {
 }
 
 
+# Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
+TOOLKIT_VERSION = "0.4.2"
+
+
 def run(cmd, timeout=25):
     try:
         p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
@@ -211,15 +215,22 @@ def _probe_kex_group(host, port=443):
     says nothing about X25519MLKEM768, and the caller must not record it as the interface's key
     exchange.
 
-    Order: host OpenSSL with the full offer; if the host refuses the offer and FEDLIN_KEX_PROBE_IMAGE
-    names a digest-pinned non-FIPS image with OpenSSL >= 3.5, that container; else the host with
-    the FIPS-offerable subset.
+    Order: host OpenSSL with the full offer; if the host refuses the offer, the bundled probe OpenSSL
+    named by FEDLIN_KEX_PROBE_OPENSSL (set in the toolkit image); then the probe container
+    (FEDLIN_KEX_PROBE_IMAGE or the image setup.sh builds); else the host with the FIPS-offerable subset.
     """
     hp, h = _hp(host, port)
     base = f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} -groups "
     out = run(base + _KEX_GROUPS + " 2>&1")
     if "SSL_CONF_cmd" not in out:
         return _parse_kex_group(out), "host", True
+    probe = os.environ.get("FEDLIN_KEX_PROBE_OPENSSL", "")
+    if probe and os.path.isfile(probe) and os.access(probe, os.X_OK):
+        pout = run(f"echo | timeout 8 {shlex.quote(probe)} s_client -connect {hp} -servername {h} "
+                   f"-groups {_KEX_GROUPS} 2>&1")
+        grp = None if "SSL_CONF_cmd" in pout else _parse_kex_group(pout)
+        if grp:
+            return grp, "bundled", True
     img = os.environ.get("FEDLIN_KEX_PROBE_IMAGE", "") or _default_probe_image()
     if img:
         grp = _probe_kex_group_container(host, port, img)
@@ -672,8 +683,7 @@ class CBOM:
                 "component": self._subject(),
                 "lifecycles": [{"phase": "discovery" if self._interfaces else "build"}],
                 "tools": {"components": [{"type": "application", "name": "fedlin-pqc-toolkit",
-                                          "version": f"0.5.0-dev (ruleset {cnsa.RULESET_VERSION}, "
-                                                     f"profile {cnsa.DEFAULT_PROFILE})",
+                                          "version": TOOLKIT_VERSION,
                                           "publisher": "FEDLIN"}]},
                 "properties": props,
             },
@@ -945,6 +955,8 @@ def merge_boms(cyclonedx_bin, inputs, out):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--version", action="version",
+                    version=f"fedlin-pqc-toolkit {TOOLKIT_VERSION} (ruleset {cnsa.RULESET_VERSION})")
     ap.add_argument("--out", default="out/cbom.json")
     ap.add_argument("--name", default="openshift-cluster")
     ap.add_argument("--repo", default="", help="optional source repo/dir -> cdxgen dependency SBOM, merged in")
@@ -1102,6 +1114,8 @@ def main():
         parts = []
         if "host" in vias:
             parts.append("host OpenSSL, full offer")
+        if "bundled" in vias:
+            parts.append(f"bundled probe OpenSSL {os.environ.get('FEDLIN_KEX_PROBE_OPENSSL', '')}, full offer")
         if "container" in vias:
             parts.append(f"container {img}, full offer")
         if "host-fips-subset" in vias:

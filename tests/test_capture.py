@@ -62,6 +62,31 @@ class Capture(unittest.TestCase):
             self.assertEqual(tp._probe_kex_group("fedlin.com"), ("X25519MLKEM768", "container", True))
         self.assertEqual(c.call_args[0][2], "localhost/fedlin-kex-probe:0.1")
 
+    def test_fips_host_uses_bundled_probe_openssl_first(self):
+        outs = iter(["Call to SSL_CONF_cmd(-groups, X25519MLKEM768) failed",
+                     "Negotiated TLS1.3 group: X25519MLKEM768"])
+        cmds = []
+        def fake_run(cmd, timeout=25):
+            cmds.append(cmd)
+            return next(outs)
+        with mock.patch.object(tp, "run", side_effect=fake_run), \
+             mock.patch.dict("os.environ", {"FEDLIN_KEX_PROBE_OPENSSL": "/usr/local/bin/kex-probe-openssl"}), \
+             mock.patch.object(tp.os.path, "isfile", return_value=True), \
+             mock.patch.object(tp.os, "access", return_value=True), \
+             mock.patch.object(tp, "_probe_kex_group_container") as c:
+            self.assertEqual(tp._probe_kex_group("fedlin.com"), ("X25519MLKEM768", "bundled", True))
+        c.assert_not_called()
+        self.assertIn("/usr/local/bin/kex-probe-openssl s_client", cmds[1])
+
+    def test_missing_bundled_probe_is_skipped(self):
+        outs = iter(["Call to SSL_CONF_cmd(-groups, X25519MLKEM768) failed",
+                     "Peer Temp Key: ECDH, prime256v1, 256 bits"])
+        with mock.patch.object(tp, "run", side_effect=lambda cmd, timeout=25: next(outs)), \
+             mock.patch.object(tp, "_default_probe_image", return_value=""), \
+             mock.patch.dict("os.environ", {"FEDLIN_KEX_PROBE_IMAGE": "",
+                                            "FEDLIN_KEX_PROBE_OPENSSL": "/nonexistent/openssl"}):
+            self.assertEqual(tp._probe_kex_group("fedlin.com"), ("prime256v1", "host-fips-subset", False))
+
     def test_capture_cert_never_invents_rsa(self):
         with mock.patch.object(tp, "run", return_value="Certificate:\n  Signature Algorithm: x\n"), \
              mock.patch.object(tp, "_probe_kex_group", return_value=(None, "host", True)):

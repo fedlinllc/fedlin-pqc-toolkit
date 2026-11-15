@@ -91,8 +91,8 @@ recorded from a count of SealedSecret objects); they carry `fedlin:evidence` = `
 
 OpenSSL in FIPS mode will not offer X25519MLKEM768, so a FIPS host cannot observe the most common
 post-quantum key exchange. `setup.sh` builds a small probe image (Alpine pinned by digest, OpenSSL
-3.5.9) that the pipeline uses automatically on such hosts. Without it, anything the scan could not
-observe is recorded as `unknown`, never guessed, and the report is marked **Incomplete** with no letter
+3.5.9) that the pipeline uses automatically on such hosts, and the toolkit container image bundles the
+same OpenSSL. Without either, anything the scan could not observe is recorded as `unknown`, never guessed, and the report is marked **Incomplete** with no letter
 grade.
 
 The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. It does not
@@ -113,10 +113,6 @@ Stated so a result is not read as more than it is:
   the 2.0 release.
 - The PKI Consortium CBOM profiles are working-group drafts (`pkic.example` identifiers). "Conforms" means
   the vendored validator reports CONFORMS for the entry profile at the pinned commit.
-- The toolkit container image (`Containerfile`) uses the UBI 9 OpenSSL, which follows the host's FIPS
-  mode and system crypto policy and so may not offer X25519MLKEM768. Endpoint scans from inside the
-  image can therefore come back Incomplete; run endpoint scans from the host after `setup.sh`, which uses
-  the probe image.
 - `setup.sh` targets Linux x86-64. Podman is needed for the probe image and cbomkit-theia; without it
   setup skips both and endpoint scans fall back as described above.
 
@@ -128,6 +124,12 @@ python3 -I -m unittest discover -s tests -v
 
 Standard library only and offline. The suite includes the PKI Consortium CBOM validator (vendored in
 `third_party/pkic-cbom`), which must report CONFORMS for the entry profile.
+
+## Versions
+
+Releases are tagged `vMAJOR.MINOR.PATCH` and listed in [CHANGELOG.md](CHANGELOG.md). The toolkit version
+is stamped in each CBOM and printed by `python3 scripts/tier2_pipeline.py --version`; the ruleset version
+is stamped in each policy result, and every verdict change is explained in [CORRECTIONS.md](CORRECTIONS.md).
 
 ## Supply chain
 
