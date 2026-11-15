@@ -1,0 +1,363 @@
+{
+ "source": {
+  "title": "Post-quantum questions to ask your vendors: Evaluating third-party readiness for post-quantum cryptography",
+  "authors": "Australian Signals Directorate's Australian Cyber Security Centre (ASD's ACSC), in partnership with CISA and NSA",
+  "published": "2026-11-04 (joint edition; ASD original July 2026)",
+  "urls": [
+   "https://media.defense.gov/2026/Nov/04/2004022835/-1/-1/0/POST_QUANTUM_QUESTIONS_TO_ASK_YOUR_VENDORS.PDF",
+   "https://media.defense.gov/2026/Nov/04/2004022978/-1/-1/0/POST_QUANTUM_QUESTIONS_QUICK_REFERENCE_LIST.PDF",
+   "https://www.cyber.gov.au/publication/post-quantum-questions-to-ask-your-vendors"
+  ],
+  "license": "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). (c) Commonwealth of Australia 2026. Question, 'why it matters' and 'key response considerations' text reproduced verbatim apart from PDF line-break hyphenation; ids (L1..C6), claim_type, check and structured_claims are this toolkit's additions.",
+  "framework": "ASD's ACSC LATICE: Locate, Assess, Triage, Implement, Communicate and educate",
+  "scaling_note": "Organisations do not need to ask every question of every vendor. Instead, apply the questions based on the vendor's risk level, data sensitivity and longevity, and the organisation's current stage of PQC transition."
+ },
+ "claim_types": {
+  "disclosure": "A statement of fact about the product (which algorithms, where, in which configuration). Where a check is listed, the toolkit compares the answer with the vendor's CBOM.",
+  "capability": "A statement that the product can do something. It holds only for the version and configuration assessed; the toolkit records it and the evidence cited.",
+  "intent": "A plan, date or commitment. The toolkit records it and flags missing or late dates; it cannot verify it."
+ },
+ "common_concerns": [
+  "limited visibility of cryptographic use",
+  "reliance on general assurances",
+  "unclear or deferred transition timelines",
+  "use of proprietary or opaque cryptography",
+  "treatment of PQC as an optional or premium function",
+  "over-reliance on compensating controls",
+  "lack of governance or ownership"
+ ],
+ "questions": [
+  {
+   "id": "L1",
+   "phase": "Locate",
+   "question": "Do you maintain a current inventory of cryptographic dependencies, such as cryptographic bills of materials (CBOM) or equivalent artefacts?",
+   "why_it_matters": "Inventorying cryptographic dependencies helps identify and manage algorithms, libraries, protocols, parameters and configurations across systems. This inventory should include where cryptography underpins authentication, signing, and data protection (in transit or at rest).",
+   "key_response_considerations": "Complete and current inventories (such as CBOMs) that lists algorithms, protocols, libraries, parameters and configurations, including third-party and embedded components. The inventory should be actively maintained.",
+   "claim_type": "disclosure",
+   "check": "cbom_supplied",
+   "structured_claims": {
+    "cbom": "true/false: a CBOM is supplied (path in the top-level 'cbom' field)"
+   }
+  },
+  {
+   "id": "L2",
+   "phase": "Locate",
+   "question": "Where is cryptography implemented?",
+   "why_it_matters": "Cryptography may exist across application, operating system, middleware, hardware and firmware layers. Knowing where it is used helps determine how difficult a PQC transition will be.",
+   "key_response_considerations": "Clear identification of cryptographic use across all layers, with no reliance on assumptions.",
+   "claim_type": "disclosure",
+   "check": "cbom_layers",
+   "structured_claims": {}
+  },
+  {
+   "id": "L3",
+   "phase": "Locate",
+   "question": "Is any cryptography hardcoded, fixed or hardware bound?",
+   "why_it_matters": "Cryptography embedded in software, firmware, or hardware can be difficult to replace and may dictate transition timelines. Identifying these dependencies early reduces the risk of delays or forced system replacement.",
+   "key_response_considerations": "Confirmation that no such hard-coded, fixed or hardware-bound cryptography exists. Otherwise, identification of affected components across products or services, along with a feasible remediation roadmap such as patching, firmware upgrades or replacement.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "L4",
+   "phase": "Locate",
+   "question": "Do third-party dependencies introduce cryptography?",
+   "why_it_matters": "Supply chain components frequently define cryptographic behaviour. Visibility of inherited cryptography helps prevent hidden blockers, support coordination across dependencies, and reduce PQC transition complexity.",
+   "key_response_considerations": "Transparent disclosure of all dependencies that introduce cryptography, including the cryptographic libraries they rely on. Standardised libraries are preferred over bespoke or proprietary implementations and should be tracked within a CBOM or equivalent inventory.",
+   "claim_type": "disclosure",
+   "check": "third_party_crypto",
+   "structured_claims": {
+    "third_party_crypto": "true/false"
+   }
+  },
+  {
+   "id": "L5",
+   "phase": "Locate",
+   "question": "How is cryptography updated?",
+   "why_it_matters": "Patch-based cryptographic updates support cryptographic agility, reduce operational disruption and help avoid large-scale system replacements during PQC transition.",
+   "key_response_considerations": "Updates delivered through supported patches or maintenance releases, with clear long-term support commitments.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "L6",
+   "phase": "Locate",
+   "question": "Do your products or services rely on hardware roots of trust?",
+   "why_it_matters": "Hardware trust anchors can lock in cryptographic choices and constrain transition pathways, particularly where cryptographic functions depend on fixed hardware capabilities. Embedded certificates or other cryptographic material within these trust anchors may be difficult to replace or update.",
+   "key_response_considerations": "Identification of hardware trust anchors and their role in cryptographic operations. Responses should include any PQC transition constraints, affected components, and feasible remediation approaches such as patching, firmware upgrades or replacement.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "L7",
+   "phase": "Locate",
+   "question": "How is firmware authenticity verified?",
+   "why_it_matters": "Firmware signing mechanisms are long-lived and difficult to change, making them a key constraint for PQC transition.",
+   "key_response_considerations": "Clear description of firmware signing mechanisms, such as Secure Boot or Unified Extensible Firmware Interface.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "L8",
+   "phase": "Locate",
+   "question": "Can the firmware and boot processes be updated to support PQC signature schemes?",
+   "why_it_matters": "Firmware and boot-chain cryptography may require device replacement if not designed for cryptographic agility.",
+   "key_response_considerations": "Evidence that firmware and boot processes can be updated without hardware replacement. Otherwise, a roadmap for supporting PQC-compatible signature schemes.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "A1",
+   "phase": "Assess",
+   "question": "Which customer data flows rely on traditional asymmetric cryptography?",
+   "why_it_matters": "Mapping of authentication, key exchange, and signing pathways is needed to assess exposure, select appropriate transition approaches and identify edge cases during testing.",
+   "key_response_considerations": "Clear mapping of customer data flows that use traditional asymmetric cryptography across interfaces and protocols, specifying whether those flows protect authentication, key establishment or data integrity.",
+   "claim_type": "disclosure",
+   "check": "traditional_asymmetric",
+   "structured_claims": {
+    "traditional_asymmetric": "true/false: any customer data flow relies on traditional asymmetric cryptography"
+   }
+  },
+  {
+   "id": "A2",
+   "phase": "Assess",
+   "question": "What assumptions does your product or service make about the lifespan of the data it processes or stores, and how can customers configure or manage those lifespans?",
+   "why_it_matters": "Data with long-lived confidentiality requirements is at risk from future CRQC-enabled attacks, such as 'harvest now, decrypt later', and may require earlier transition to PQC.",
+   "key_response_considerations": "Clear articulation of data lifetime assumptions, default retention behaviours and customer controls are reflected in the vendor's PQC roadmap and customer configuration guidance. These factors should be weighed against customer data lifespans and their required cryptographic needs from the product or service.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "A3",
+   "phase": "Assess",
+   "question": "Do you have a documented, product- or service-specific assessment of CRQC risks?",
+   "why_it_matters": "This demonstrates the vendor understands quantum-related cryptographic risks, anticipated timelines and mitigation strategies, aligned with relevant guidance.",
+   "key_response_considerations": "A documented internal assessment that clearly states scope, assumptions and outcomes. It also demonstrates consideration of authoritative guidance.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "A4",
+   "phase": "Assess",
+   "question": "Do you distinguish between signing, encryption and authentication risks?",
+   "why_it_matters": "Signing, encryption and authentication failures have different impacts and timelines. Integrity and authentication risks may require different transition sequences and controls compared to confidentiality risks.",
+   "key_response_considerations": "Clear separation of signing, encryption and authentication use cases, with distinct risk assessments, transition timelines and mitigation strategies for each.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "A5",
+   "phase": "Assess",
+   "question": "Can customers choose stronger cryptographic settings today?",
+   "why_it_matters": "Using stronger traditional cryptographic settings, such as larger key sizes, may offer only marginal, short-term risk reduction. However, these measures do not address the risks posed by a CRQC and are not a substitute for transitioning to PQC.",
+   "key_response_considerations": "Higher security strength options are available as supported, documented configurations rather than bespoke or one-off implementations.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "A6",
+   "phase": "Assess",
+   "question": "What authentication mechanisms rely on traditional asymmetric cryptography?",
+   "why_it_matters": "Authentication systems often have long replacement cycles and may become critical bottlenecks.",
+   "key_response_considerations": "Identification of authentication mechanisms, such as certificates, smartcards and tokens, including their lifecycle and replacement timelines.",
+   "claim_type": "disclosure",
+   "check": "auth_asymmetric",
+   "structured_claims": {
+    "traditional_asymmetric_auth": "true/false"
+   }
+  },
+  {
+   "id": "T1",
+   "phase": "Triage",
+   "question": "Which products or services will be PQC-ready early enough to support customer rollout before the end of 2030?",
+   "why_it_matters": "Concrete vendor readiness dates enable organisations to plan testing, transition and procurement activities in time to complete PQC transition by the end of 2030.",
+   "key_response_considerations": "Product- or service-specific and versioned commitments for PQC-ready releases. Offerings should be available in advance of 2030 to allow for customer testing, staged transition, and production rollout.",
+   "claim_type": "intent",
+   "check": "dated",
+   "structured_claims": {
+    "pqc_ready_date": "YYYY-MM or YYYY-MM-DD of the PQC-ready release"
+   }
+  },
+  {
+   "id": "T2",
+   "phase": "Triage",
+   "question": "Which components require hardware replacement or re-architecture?",
+   "why_it_matters": "Hardware changes are long-lead items and can significantly affect timelines, cost and interoperability.",
+   "key_response_considerations": "Transparent disclosure of components requiring hardware replacement or re-architecture, including reasons for redesign, known constraints or bottlenecks, and any resulting impacts on delivery timelines.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "T3",
+   "phase": "Triage",
+   "question": "Do you support PQ/T hybrid modes as a temporary transition mechanism, and how and when will you transition to PQC-only?",
+   "why_it_matters": "PQ/T hybrid schemes may support short-term interoperability or resiliency, but are not recommended as a long-term solution. The presence of a CRQC would render the traditional elements obsolete, requiring transition to pure PQC algorithms.",
+   "key_response_considerations": "Hybrid schemes, if supported, are clearly defined as a transitional measure only. Responses should include a documented plan and timeline for de-hybridisation and transition to PQC-only.",
+   "claim_type": "capability",
+   "check": "hybrid",
+   "structured_claims": {
+    "hybrid": "true/false",
+    "pqc_only_date": "YYYY-MM: planned PQC-only date"
+   }
+  },
+  {
+   "id": "T4",
+   "phase": "Triage",
+   "question": "How do you consider customer risk when prioritising PQC transition activities?",
+   "why_it_matters": "Risk-based prioritisation helps ensure that customers with higher exposure or more sensitive data are not delayed due to purely commercial or operational considerations.",
+   "key_response_considerations": "A documented and risk-based prioritisation approach that considers factors such as system exposure, data sensitivity and transition complexity, rather than customer size or revenue.",
+   "claim_type": "intent",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "T5",
+   "phase": "Triage",
+   "question": "What internal governance arrangements oversee your PQC transitions?",
+   "why_it_matters": "Clear governance and executive accountability reduce implementation risk and support consistent prioritisation across products or services. This includes products and services delivered through managed or shared platforms.",
+   "key_response_considerations": "Defined governance structures with executive ownership, documented decision forums, and regular review cycles that oversee PQC planning, delivery and customer impact across products or services.",
+   "claim_type": "intent",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "I1",
+   "phase": "Implement",
+   "question": "Which PQC algorithms will you support, and when will support be generally available to customers?",
+   "why_it_matters": "Support for standards-based PQC algorithms underpins interoperability, assurance and the long-term sustainability of PQC deployments.",
+   "key_response_considerations": "A clear commitment to standards-based algorithms, approved by the appropriate authoring agency for your organisation, with defined timelines outlining when support will be available to customers.",
+   "claim_type": "intent",
+   "check": "pqc_algorithms",
+   "structured_claims": {
+    "pqc_algorithms": "list of algorithm names, e.g. [\"ML-KEM-768\", \"ML-DSA-65\"]",
+    "ga_date": "YYYY-MM: general availability"
+   }
+  },
+  {
+   "id": "I2",
+   "phase": "Implement",
+   "question": "Is your PQC implementation production-ready and available for customer use?",
+   "why_it_matters": "Production-ready implementations minimise operational risk and help organisations avoid relying on preview, experimental or unsupported cryptographic functionality during PQC transition.",
+   "key_response_considerations": "Availability as a supported, customer-deployable release, with defined support arrangements (such as service-level agreements) and documented guidance for production deployments and operation.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "I3",
+   "phase": "Implement",
+   "question": "How do you validate and maintain cryptographic libraries?",
+   "why_it_matters": "Using reputable and well-maintained cryptographic libraries reduces security, compliance and long-term maintenance risks, and supports the secure adoption of PQC.",
+   "key_response_considerations": "Use of reputable and actively maintained cryptographic libraries with evidence of validation or independent scrutiny. Bespoke or proprietary cryptographic implementations should be avoided, where possible.",
+   "claim_type": "capability",
+   "check": "library_validation",
+   "structured_claims": {}
+  },
+  {
+   "id": "I4",
+   "phase": "Implement",
+   "question": "How will key management, certificate sizes and lifecycle processes change under PQC?",
+   "why_it_matters": "PQC can increase key and certificate sizes, affecting operational processes and system performance. Poor planning may lead to performance or compatibility issues.",
+   "key_response_considerations": "Clear explanation of changes to key and certificate sizes, lifecycles and operational processes, including any impacts on existing systems and how these will be supported in production.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "I5",
+   "phase": "Implement",
+   "question": "How do customers enable PQC in your product or service?",
+   "why_it_matters": "Clear and supported enablement processes reduce deployment risk and help ensure predictable and safe transitions to PQC.",
+   "key_response_considerations": "Documented configuration and deployment steps, including prerequisites and known compatibility or interoperability considerations for relevant protocols and integrations.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "I6",
+   "phase": "Implement",
+   "question": "Is PQC included in base licensing?",
+   "why_it_matters": "Including PQC in base licensing avoids security controls being paywalled, which could delay adoption and lead to uneven risk across customers.",
+   "key_response_considerations": "Confirmation that PQC functionality is included under standard licensing terms, without additional licensing fees or premium add-ons.",
+   "claim_type": "disclosure",
+   "check": null,
+   "structured_claims": {
+    "pqc_in_base_license": "true/false"
+   }
+  },
+  {
+   "id": "C1",
+   "phase": "Communicate and educate",
+   "question": "How are customers notified of cryptographic changes?",
+   "why_it_matters": "Proactive notification of cryptographic changes enables organisations to assess impact, schedule testing, and maintain security and compliance requirements.",
+   "key_response_considerations": "Formal and predictable communication mechanisms, such as security advisories, pre-release notes and transition notices.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "C2",
+   "phase": "Communicate and educate",
+   "question": "Do you provide customer-ready transition guides for PQC?",
+   "why_it_matters": "Clear and practical transition guidance reduces integration effort and errors. This supports safer and more efficient adoption of PQC.",
+   "key_response_considerations": "Clear and customer-ready instructions for enabling and validating PQC, including examples and testing guidance.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "C3",
+   "phase": "Communicate and educate",
+   "question": "How will traditional cryptography be deprecated, including any temporary use of PQ/T hybrid approaches?",
+   "why_it_matters": "Clear timelines for retiring old cryptography helps organisations avoid abrupt change, plan testing, and make sure hybrid methods are used only briefly.",
+   "key_response_considerations": "Clear deprecation timelines covering warning periods, support windows, any interim hybrid use, and final removal of traditional cryptography, with a defined path to PQC-only operation.",
+   "claim_type": "intent",
+   "check": "dated",
+   "structured_claims": {
+    "deprecation_date": "YYYY-MM: final removal of traditional cryptography"
+   }
+  },
+  {
+   "id": "C4",
+   "phase": "Communicate and educate",
+   "question": "Are your support and engineering teams trained to support PQC?",
+   "why_it_matters": "Trained teams reduce support risk and accelerate incident resolution during transition.",
+   "key_response_considerations": "Evidence of staff training, updated runbooks, and documentation of known issues.",
+   "claim_type": "capability",
+   "check": null,
+   "structured_claims": {}
+  },
+  {
+   "id": "C5",
+   "phase": "Communicate and educate",
+   "question": "Does your roadmap align with relevant guidance and support PQC transition by the end of 2030?",
+   "why_it_matters": "Alignment with authoritative guidance helps avoid dead-ends and helps ensure customer transition plans can be completed within expected timeframes.",
+   "key_response_considerations": "Roadmaps that reference relevant guidance with clear milestones supporting customer testing, transition and production rollout before the end of 2030.",
+   "claim_type": "intent",
+   "check": "dated",
+   "structured_claims": {
+    "roadmap_date": "YYYY-MM: milestone for PQC transition support"
+   }
+  },
+  {
+   "id": "C6",
+   "phase": "Communicate and educate",
+   "question": "Do you contribute to or track relevant PQC standards bodies, and how does this influence your roadmap?",
+   "why_it_matters": "Engagement with standards bodies supports alignment with emerging PQC standards, reduces incompatibility risks, and enables vendors to share implementation challenges to improve practicality and interoperability.",
+   "key_response_considerations": "Evidence of participation in, or tracking of, relevant standards bodies and how this informs product roadmaps and implementation decisions.",
+   "claim_type": "intent",
+   "check": null,
+   "structured_claims": {}
+  }
+ ]
+}

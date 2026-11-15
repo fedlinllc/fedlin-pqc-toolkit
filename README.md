@@ -113,6 +113,25 @@ and operating environments in approved mode, which only its Security Policy show
 cannot see the server's implementation. The snapshot is refreshed deliberately at release time
 (`python3 scripts/cmvp.py snapshot --out data/cmvp/cmvp-YYYY-MM-DD.json`); scans never contact NIST.
 
+## Vendor readiness
+
+`scripts/vendor_readiness.py` turns the 31 questions in *Post-quantum questions to ask your vendors*
+(ASD's ACSC with CISA and NSA, November 2026, reproduced under CC BY 4.0) into a questionnaire, an answer
+template, and an assessment that checks a vendor's answers against the vendor's own CBOM:
+
+```bash
+python3 scripts/vendor_readiness.py questionnaire --out vendor-questions.md   # send to the vendor
+python3 scripts/vendor_readiness.py template --out answers.json               # fill in answers and claims
+python3 scripts/vendor_readiness.py assess --answers answers.json             # report + summary JSON
+```
+
+Each question is typed. **Disclosure** answers (inventory, third-party cryptography, data flows and
+authentication on traditional asymmetric cryptography, hybrid use, PQC algorithms, library validation) are
+compared with the CBOM, and a contradiction is reported as such. **Capability** answers are recorded with
+their evidence and hold only for the version assessed. **Intent** answers (dates, roadmaps, licensing) are
+recorded and flagged when a date is missing or after 2030; they are never verified. The publication's seven
+"common concerns in vendor responses" are raised from structured fields only, not from free-text answers.
+
 ## Known limits
 
 Stated so a result is not read as more than it is:

@@ -11,6 +11,16 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-15
+
+### Added
+- Vendor readiness (`scripts/vendor_readiness.py`, `data/vendor-questions/`): the 31 questions of
+  "Post-quantum questions to ask your vendors" (ASD's ACSC with CISA and NSA, November 2026, CC BY 4.0) as a
+  questionnaire, an answer template and an assessment. Each question is typed as disclosure, capability or
+  intent; disclosure answers are checked against the vendor's CBOM (contradictions reported), dates are
+  checked against the end of 2030, and the publication's seven common concerns are raised from structured
+  fields. Uses the ruleset, the CMVP snapshot and the PKI Consortium validator.
+
 ## [0.5.1] - 2026-11-15
 
 ### Fixed
@@ -111,7 +121,8 @@ First public release.
 - Key-exchange probe image so a FIPS scan host can observe X25519MLKEM768.
 - Pinned, checksum-verified downloads; CI with tests and Gitleaks.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.4.2...v0.4.3
