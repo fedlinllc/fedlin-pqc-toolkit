@@ -132,6 +132,20 @@ their evidence and hold only for the version assessed. **Intent** answers (dates
 recorded and flagged when a date is missing or after 2030; they are never verified. The publication's seven
 "common concerns in vendor responses" are raised from structured fields only, not from free-text answers.
 
+## PQC Maturity Model evidence
+
+`scripts/pqcmm_evidence.py --cbom out/cbom.json [--answers answers.json]` maps what a scan observed to the
+PKI Consortium PQC Maturity Model (v1.0.1, vendored in `third_party/pkic-pqcmm`, MIT). It pre-fills the
+model's own response fields for the questions a CBOM can evidence (algorithms in use, where they are used,
+interoperability from an observed handshake, inventory completeness, non-quantum-safe features, a draft
+harvest-now-decrypt-later register, hybrid use, CMVP candidates, identifiers) and marks where each value came
+from: observed, derived, snapshot, or vendor-stated.
+
+It does not award a maturity level or mark any criterion met. The PQCMM assesses a product or service; a scan
+observes one deployment, so a capability shown holds only for that configuration, and every criterion is
+left for an assessor. The one conclusion it draws is a contradiction: if quantum-resistant algorithms are
+observed, the Level 0 criterion "no quantum-safe algorithm available" does not hold.
+
 ## Known limits
 
 Stated so a result is not read as more than it is:

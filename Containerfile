@@ -65,6 +65,7 @@ RUN want="$(sed -n 's/.*"packageManager": *"pnpm@10.34.9+sha512\.\([0-9a-f]*\)".
  && rm -rf /root/.npm /root/.cache /root/.local/share/pnpm/store /tmp/*
 COPY scripts ./scripts
 COPY data ./data
+COPY third_party ./third_party
 COPY README.md ./
 RUN mkdir -p /opt/toolkit/out && chmod -R a+rwX /opt/toolkit/out
 

@@ -1,4 +1,4 @@
-# fedlin-pqc-toolkit — pinned versions (v0.6.1)
+# fedlin-pqc-toolkit — pinned versions (v0.7.0)
 # Reproducibility manifest. Update deliberately; the OCI image + setup.sh should match these.
 # Format: component = version/ref (source)
 
@@ -46,3 +46,9 @@ sonar-cryptography = external  # CBOMkit-hyperion scanner (Java/Python/Go source
 file            = data/cmvp/cmvp-2026-11-15.json
 sha256          = d8e5e6fd10d119241262c6afff6f1cc09d3409567ed2c048dbd7991e3ec40b16
 certificates    = 40 of 754 listed
+
+[pkic-pqcmm]
+# PKI Consortium PQC Maturity Model, github.com/pkic/pqcmm tag v1.0.1 (commit 5ad816e), MIT.
+# The JSON is the YAML converted for stdlib reading (third_party/pkic-pqcmm/README.md).
+pqcmm-model-1.0.1.yaml = 98b6e914b3a46d9bb8aac49455ef1107846e454c12d27de68d0955194845bf24
+pqcmm-model-1.0.1.json = 0e030dbacb6162d8647356c3d9d002ec92c8ab5341e9ed7866a4a2cfa458300c

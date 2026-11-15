@@ -11,6 +11,18 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-15
+
+### Added
+- PQC Maturity Model evidence (`scripts/pqcmm_evidence.py`): maps a CBOM (and optionally vendor-readiness
+  answers) to the PKI Consortium PQCMM v1.0.1 (vendored, MIT, pinned in `toolkit.lock`). Pre-fills the
+  model's response fields for 26 of its 72 questions with provenance (observed, derived, snapshot, vendor);
+  never awards a level or marks a criterion met. Report plus JSON.
+
+### Fixed
+- The container image now includes `third_party/` (PQCMM model, PKI Consortium validator), which the
+  vendor-readiness and PQCMM modules read.
+
 ## [0.6.1] - 2026-11-15
 
 ### Fixed
@@ -132,7 +144,8 @@ First public release.
 - Key-exchange probe image so a FIPS scan host can observe X25519MLKEM768.
 - Pinned, checksum-verified downloads; CI with tests and Gitleaks.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.5.0...v0.5.1
