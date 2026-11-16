@@ -1,4 +1,4 @@
-# fedlin-pqc-toolkit — portable, air-gappable PQC assessment toolkit.
+# fedlin-pqc-toolkit: portable, air-gappable PQC assessment toolkit.
 # Bundles: python pipeline + CNSA 2.0 overlay, cyclonedx-cli, cdxgen, cbomkit-theia, oc, openssl, jq.
 
 # --- stage 1: build cbomkit-theia from source (stripped static binary) ---
@@ -21,7 +21,7 @@ RUN apk add --no-cache openssl=3.5.9-r0 \
  && cp /lib/ld-musl-x86_64.so.1 /usr/lib/libssl.so.3 /usr/lib/libcrypto.so.3 /out/lib/ \
  && cp /etc/ssl/openssl.cnf /out/openssl.cnf
 
-# --- stage 2: final runtime — MINIMAL UBI9 node image (node+npm present, microdnf-based) ---
+# --- stage 2: final runtime: MINIMAL UBI9 node image (node+npm present, microdnf-based) ---
 FROM registry.access.redhat.com/ubi9/nodejs-22-minimal@sha256:0cc4ae118138dd07280d5abaa12b6a018e5bc82c048296f3c3676e62d3a1d8a8
 USER 0
 # cyclonedx-cli is a self-contained .NET binary; libicu + invariant mode satisfy its globalization needs
@@ -53,7 +53,7 @@ COPY --from=theia /cbomkit-theia /usr/local/bin/cbomkit-theia
 WORKDIR /opt/toolkit
 COPY package.json pnpm-lock.yaml ./
 # ubi9/nodejs-22-minimal ships npm but NOT corepack, so bootstrap the pnpm CLI with npm (that only
-# fetches the pnpm binary — pnpm still installs the project deps from pnpm-lock.yaml, off the lockfile).
+# fetches the pnpm binary: pnpm still installs the project deps from pnpm-lock.yaml, off the lockfile).
 # The pnpm tarball is checked against the sha512 pinned in package.json "packageManager".
 RUN want="$(sed -n 's/.*"packageManager": *"pnpm@10.34.9+sha512\.\([0-9a-f]*\)".*/\1/p' package.json)" \
  && curl -sSfL -o /tmp/pnpm.tgz https://registry.npmjs.org/pnpm/-/pnpm-10.34.9.tgz \

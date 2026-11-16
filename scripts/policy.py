@@ -24,6 +24,7 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling modules, also under python -I
 import cnsa20_ruleset as cnsa
 import crosswalk
 
@@ -67,6 +68,10 @@ def _props(c):
 def _bits(ap):
     b = ap.get("parameterSetIdentifier")
     return int(b) if b and str(b).isdigit() else None
+
+
+def _csv(v):
+    return [x for x in (v or "").split(",") if x and x != "none"]
 
 
 def _status(v):
@@ -139,6 +144,33 @@ def evaluate(cbom_path, profile=None, regime=None, date=None):
             "cite": ["IR8547"] if vuln else [],
         })
 
+    # What a TLS endpoint accepts besides the negotiated session (enumeration facts on the interface): every
+    # accepted protocol version, cipher suite, key-exchange group and DH size, judged by the same ruleset.
+    # Lane "configuration": reported and listed as exposures, but not part of the usage-weighted score.
+    for c in bom.get("components", []):
+        p = _props(c)
+        if p.get("fedlin:enumeration") != "complete":
+            continue
+        items = [("protocol version", v, None) for v in _csv(p.get("fedlin:acceptedProtocolVersions"))]
+        for k, v in sorted(p.items()):
+            if k.startswith("fedlin:acceptedCipherSuites:"):
+                items += [(f"cipher suite ({k.split(':', 2)[2]})", x, None) for x in _csv(v)]
+        items += [("key-exchange group", g, None) for g in _csv(p.get("fedlin:acceptedGroups"))]
+        items += [("Diffie-Hellman group", "DH", int(b)) for b in _csv(p.get("fedlin:dhGroupBits")) if b.isdigit()]
+        for kind, item, bits in items:
+            v = cnsa.classify(item, bits, profile=profile)
+            label = f"of {bits} bits" if bits else item
+            findings.append({
+                "document": doc, "bomRef": c.get("bom-ref"), "name": f"accepts {kind} {label}",
+                "canonical": v["canonical"], "lane": "configuration", "status": _status(v),
+                "quantumVulnerable": v["quantum_vulnerable"], "priority": v["priority"],
+                "target": v["cnsa_target"], "controls": v["controls"],
+                "nistQuantumSecurityLevel": v["nist_pqc_level"], "classicalSecurityLevel": v["classical_security_level"],
+                "deprecatedAfter": v["deprecated_after"], "disallowedAfter": v["disallowed_after"],
+                "ruleId": v["rule_id"], "cite": v["cite"], "note": v["note"],
+                "configItem": {"kind": kind, "value": item, "bits": bits},
+            })
+
     summary = {}
     for f in findings:
         summary[f["status"]] = summary.get(f["status"], 0) + 1
@@ -164,6 +196,53 @@ def verify(result, cbom_path):
     return want.get(os.path.basename(cbom_path)) == got or got in want.values()
 
 
+_CHECKED = ("status", "target", "quantumVulnerable", "priority", "controls", "lane", "canonical")
+
+
+def check(result, cbom_path):
+    """Can these verdicts be trusted for this CBOM? Three independent checks, all must pass.
+
+    bound:       the CBOM file's SHA-256 matches the digest the result recorded for it.
+    ruleset:     the result names this toolkit's ruleset (same SHA-256), so it can be re-checked here.
+    reproduced:  re-evaluating the CBOM with that ruleset and profile gives every recorded verdict
+                 (status, target, quantum vulnerability, priority). None when the ruleset differs.
+    A policy result is not signed: a file that passes says only that its verdicts are what this ruleset
+    gives for this CBOM, which is exactly what can be checked without trusting whoever wrote it.
+    """
+    out = {"bound": bool(verify(result, cbom_path)), "ruleset": False, "reproduced": None, "mismatches": []}
+    pol = result.get("policy", {}) or {}
+    out["ruleset"] = (pol.get("digest") or {}).get("value") == _ruleset_digest()
+    if out["bound"] and out["ruleset"]:
+        profile = pol.get("profile") if pol.get("profile") in cnsa.PROFILES else None
+        if profile is None:
+            out["reproduced"] = False
+            out["mismatches"].append("policy result names no known profile")
+        else:
+            fresh = evaluate(cbom_path, profile=profile)
+            key = lambda f: (f.get("bomRef"), f.get("lane"), f.get("name"))  # noqa: E731
+            seen = {}
+            for f in result.get("findings", []) or []:
+                seen[key(f)] = seen.get(key(f), 0) + 1
+            for k, n in seen.items():
+                if n > 1:  # a duplicate could hide a forged copy behind a genuine one
+                    out["mismatches"].append(f"{k[0]} {k[2]}: {n} copies of one finding")
+            want = {key(f): f for f in fresh["findings"]}
+            got = {key(f): f for f in result.get("findings", []) or []}
+            if (result.get("summary") or {}) != fresh["summary"]:
+                out["mismatches"].append("summary counts differ from a re-evaluation")
+            for k in sorted(set(want) | set(got), key=str):
+                a, b = want.get(k), got.get(k)
+                if a is None or b is None:
+                    out["mismatches"].append(f"{k[0]} {k[2]}: finding {'added' if a is None else 'missing'}")
+                    continue
+                diff = [x for x in _CHECKED if a.get(x) != b.get(x)]
+                if diff:
+                    out["mismatches"].append(f"{k[0]} {k[2]}: {', '.join(diff)} differ")
+            out["reproduced"] = not out["mismatches"]
+    out["ok"] = bool(out["bound"] and out["ruleset"] and out["reproduced"])
+    return out
+
+
 def apply(bom, result, cbom_path=None):
     """Return a copy of `bom` with the result's verdicts as properties (in memory only).
 
@@ -174,7 +253,12 @@ def apply(bom, result, cbom_path=None):
     if cbom_path and not verify(result, cbom_path):
         raise DigestMismatch(f"{cbom_path} does not match the digest in the policy result")
     view = copy.deepcopy(bom)
-    by_ref = {f["bomRef"]: f for f in result.get("findings", [])}
+    by_ref = {f["bomRef"]: f for f in result.get("findings", []) if f.get("lane") != "configuration"}
+    config = {}
+    for f in result.get("findings", []):
+        if f.get("lane") == "configuration":
+            config.setdefault(f["bomRef"], []).append(
+                {"item": f["name"], "status": f["status"], "priority": f["priority"], "target": f["target"]})
     profile = result.get("policy", {}).get("profile")
     for c in view.get("components", []):
         f = by_ref.get(c.get("bom-ref"))
@@ -198,6 +282,10 @@ def apply(bom, result, cbom_path=None):
                 props.append({"name": f"crosswalk:{f['crosswalk']['regime']}",
                               "value": " | ".join(f["crosswalk"]["refs"])})
         c["properties"] = props
+    for c in view.get("components", []):
+        if c.get("bom-ref") in config:
+            c["properties"] = [p for p in c.get("properties", []) if p.get("name") != "cnsa2:config"] + [
+                {"name": "cnsa2:config", "value": json.dumps(config[c["bom-ref"]], separators=(",", ":"))}]
     view.setdefault("metadata", {}).setdefault("properties", [])
     view["metadata"]["properties"] = [p for p in view["metadata"]["properties"]
                                       if p.get("name") != "fedlin:profile"]
@@ -263,16 +351,24 @@ def main(argv=None):
         out = a.out or a.cbom.rsplit(".", 1)[0] + ".policy.json"
         with open(out, "w") as f:
             json.dump(r, f, indent=2)
-        print(f"[ok] policy result: {out} — {r['policy']['policyId']} {r['policy']['version']}, "
+        print(f"[ok] policy result: {out}: {r['policy']['policyId']} {r['policy']['version']}, "
               f"{len(r['findings'])} finding(s): {r['summary']}")
         return 0
     with open(a.policy) as f:
         r = json.load(f)
-    if verify(r, a.cbom):
-        print(f"[ok] {a.cbom} matches the digest recorded in {a.policy}")
-        return 0
-    print(f"[FAIL] {a.cbom} does not match the digest recorded in {a.policy}")
-    return 1
+    c = check(r, a.cbom)
+    pol = r.get("policy", {}) or {}
+    print(f"[{'ok' if c['bound'] else 'FAIL'}] CBOM digest {'matches' if c['bound'] else 'does not match'} {a.policy}")
+    if c["ruleset"]:
+        print(f"[ok] ruleset {cnsa.RULESET_VERSION} (this toolkit's)")
+    else:
+        print(f"[FAIL] the result names ruleset {pol.get('version')!r}, not this toolkit's {cnsa.RULESET_VERSION} "
+              "(different digest): its verdicts cannot be re-checked here; re-run `policy.py evaluate`")
+    if c["reproduced"] is True:
+        print("[ok] every verdict reproduced by re-evaluating the CBOM")
+    elif c["reproduced"] is False:
+        print(f"[FAIL] verdicts do not match a re-evaluation ({len(c['mismatches'])}): " + "; ".join(c["mismatches"][:10]))
+    return 0 if c["ok"] else 1
 
 
 if __name__ == "__main__":

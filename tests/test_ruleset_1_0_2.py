@@ -63,7 +63,7 @@ class Redaction(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "cbom.json")
             p = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "tier2_pipeline.py"),
-                                "--no-runtime", "--merge-cbom", os.path.join(d, "none.json"),
+                                "--no-runtime",
                                 "--name", "corp.internal", "--redact", "corp.internal=example.gov",
                                 "--out", out], capture_output=True, text=True, timeout=120)
             self.assertEqual(p.returncode, 0, p.stderr)
@@ -77,7 +77,7 @@ class Redaction(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "cbom.json")
             p = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "tier2_pipeline.py"),
-                                "--no-runtime", "--merge-cbom", os.path.join(d, "none.json"),
+                                "--no-runtime",
                                 "--name", "corp", "--redact", 'corp=a"b', "--out", out],
                                capture_output=True, text=True, timeout=120)
             self.assertEqual(p.returncode, 2)

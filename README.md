@@ -18,6 +18,29 @@ what cryptography they run and how they plan to migrate it.
 
 What each mode can read is set out under [Access by mode](#access-by-mode).
 
+## What has been validated, and how
+
+Every input below exists in the code. This table says how far each one has been exercised outside unit
+tests, so you know what you are relying on. The unit and conformance tests run on every commit.
+
+| Input | Validation | Date |
+|---|---|---|
+| Live TLS endpoints, incl. ML-KEM hybrid detection and the classical-fallback probe | Public endpoints (own hosts, a large CDN, and public TLS test hosts); every fallback outcome checked against a live or purpose-built server | 2026-11-15 |
+| Endpoint enumeration (accepted versions, suites, groups, DH sizes, each certificate type) | Same public endpoints, compared with testssl.sh, sslyze and five other open tools run side by side | 2026-11-15 |
+| FIPS-mode scan host (RHEL 9) with the probe image | RHEL 9.8 in FIPS mode, on a lab host and on a VM in Azure | 2026-07-12, 2026-11-15 |
+| OpenShift routes, TLS secret counts, `--deep` FIPS checks | FEDLIN's own FIPS-mode OpenShift lab cluster | 2026-07-08 |
+| Kubernetes Ingress (non-OpenShift) | Code path reviewed; not yet run against a non-OpenShift cluster | not yet run |
+| Local SSH posture (`sshd -T`) | Lab host: host keys, key exchange (incl. ML-KEM hybrid) and ciphers checked against expected verdicts | 2026-07-12 |
+| Certificates and keys in files (`--theia-dir`) | Lab bank of 14 test certificates, incl. ML-DSA and SLH-DSA | 2026-07-12 |
+| Dependency libraries (`--repo`, cdxgen) | Unit and end-to-end tests on fixtures | tests only |
+| `--merge-cbom` with cyclonedx-cli | Toolkit container image, real cyclonedx-cli | 2026-11-15 |
+| Linux hardware posture (OS, TPM, HSM) | RHEL CoreOS 9.8 node of the lab cluster | 2026-07-31 |
+| Windows certificate stores, AD CS, hardware posture | Windows Server 2025 VM in Azure: 9/9 hardware and 1/1 AD CS checks passed; a full Windows CBOM has not yet been run end to end through the policy stage | 2026-07-31 |
+| Local MCP server | Protocol, boundary and tamper tests; not yet certified against specific agent clients | tests only |
+
+Not covered at all: AWS and GCP services (planned), Azure services such as Key Vault, IPsec/VPN,
+Kerberos, code signing, database encryption at rest.
+
 ## Quick start: scan your TLS endpoints
 
 No cluster and no source code needed.
@@ -37,8 +60,66 @@ Outputs:
 | `out/cbom.policy.json` | Verdicts in the `pkic.cbom.policy-result` 0.1 format, bound to the CBOM by SHA-256 |
 | `out/cbom.report.md` | Readiness report |
 | `out/cbom.summary.json` | Machine-readable summary |
+| `out/cbom.json.runtime.json` | The capture before merging (an intermediate; `--redact` removes intermediates) |
 
-Check that a CBOM still matches its verdicts: `python3 scripts/policy.py verify --cbom out/cbom.json --policy out/cbom.policy.json`.
+Check that a policy result can be trusted for a CBOM (the CBOM digest matches, the result names this toolkit's ruleset, and re-evaluating reproduces every verdict): `python3 scripts/policy.py verify --cbom out/cbom.json --policy out/cbom.policy.json`. The report and the MCP server use a policy result only when it passes; otherwise they evaluate the CBOM again.
+
+Or use the published container image, with nothing to install (pin it by the digest in the release notes):
+
+```bash
+mkdir -p out
+podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 \
+  --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 ...
+```
+
+## Verify a release
+
+From 1.0.0, every release is built by the [release workflow](.github/workflows/release.yml) from its tag,
+and every file and the image carry Sigstore-signed SLSA build provenance that names the workflow and commit
+(releases before 1.0.0 are tags only):
+
+```bash
+gh attestation verify fedlin-pqc-toolkit-1.0.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 --repo fedlinllc/fedlin-pqc-toolkit
+sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
+```
+
+Each release also carries an SBOM of the toolkit (`*.sbom.cdx.json`), the provenance bundle
+(`*.intoto.jsonl`) and the verdict table (`verdicts.json`). These signatures use classical algorithms,
+because Sigstore does not yet support post-quantum signatures; a post-quantum (SLH-DSA, FIPS 205)
+release ledger is planned for 1.1.
+
+## What an endpoint scan records
+
+For each endpoint the scan records the session a modern client negotiates (protocol version, cipher suite,
+key-exchange group, certificate), and then enumerates what the server **accepts**, one handshake at a time:
+
+- TLS 1.0 to 1.3 (SSLv3 is not tested). A version counts as refused only when the server sends a
+  protocol-version alert; no answer, or a failure that comes from the client, is recorded as not tested;
+- the cipher suites of each version (TLS 1.3 suites one by one; for TLS 1.0 to 1.2 the client offers all
+  suites and removes each one the server picks until it refuses, up to 40 per version; a list cut short by
+  a timeout is marked partial);
+- the key-exchange groups in the probe list: hybrid and pure ML-KEM, X25519, X448, NIST curves and FFDHE,
+  in TLS 1.3 and (for classical groups) TLS 1.2. A group counts as accepted only when the server negotiated
+  that group, and as refused only when the server sent a refusal alert; Diffie-Hellman group sizes are
+  recorded too;
+- one certificate per signature-scheme family (RSA, ECDSA, EdDSA, ML-DSA), so a server that presents an
+  RSA certificate to some clients and an ECDSA one to others has both recorded;
+- a classical-only handshake (see "Classical fallback" below).
+
+Accepted versions, suites and groups are judged by the same ruleset and reported in **Server
+configuration**: broken items (TLS 1.0/1.1, anonymous or NULL suites, small DH groups) are listed as top
+exposures and static-RSA suites as lacking forward secrecy. They do not change the score. Certificates the
+endpoint serves, including additional ones found by enumeration, are certificates in use and are scored.
+An endpoint the host OpenSSL cannot reach (for example a FIPS-mode host and a TLS 1.0-only server) is
+captured with the enumeration client instead of being dropped.
+
+Enumeration takes about 10 to 20 seconds per endpoint (endpoints run in parallel) and uses the probe
+OpenSSL (3.5), which does not implement 3DES, RC4 or export suites, so those are not tested; use
+testssl.sh if you need them checked. `--no-enumerate` skips it, and `--enumerate-pace SECONDS` pauses
+between handshakes for servers that rate-limit (a handshake that times out is recorded as not tested).
 
 ## Verdict profiles
 
@@ -72,6 +153,47 @@ determination.
   the host and fold the output in with `--merge-cbom`.
 - **AI/ML-BOM:** `scripts/ai_detector.py` inventories models, datasets and pipelines with NIST AI RMF,
   ISO/IEC 42001 and EU AI Act references.
+
+## Use with an AI agent (local MCP server)
+
+`scripts/mcp_server.py` is a Model Context Protocol server over stdio, standard library only. It gives an
+agent read-only tools over toolkit outputs in one folder you choose:
+
+| Tool | What it does |
+|---|---|
+| `list_files` | Lists the `.json` files under the folder |
+| `verify_policy` | Checks whether a policy result can be trusted for a CBOM (digest, ruleset, re-evaluation) |
+| `summarize` | Readiness summary of a CBOM; a policy result is used only if its verdicts re-check |
+| `pqcmm_evidence` | PQC Maturity Model evidence (never a level) |
+| `vendor_readiness` | Vendor answers checked against the vendor's CBOM |
+| `lookup_verdict` | The ruleset's verdict for one algorithm name under a profile |
+
+```bash
+python3 scripts/mcp_server.py --root ./out            # register this command in your MCP client
+# or from the image, with no network and the folder read-only:
+podman run -i --rm --network none -v "$PWD/out:/data:ro,Z" --entrypoint python3 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 scripts/mcp_server.py --root /data
+```
+
+The boundary is deliberate. **It never scans and makes no network connections**: you run scans yourself
+with the CLI, and the agent works on the results. It reads only `.json` files inside the folder (paths that
+leave it, including through symlinks, are refused) and writes nothing. Certificate fields, vendor answers and
+third-party CBOMs are written by other people, so every result is marked as untrusted data, and strings are
+stripped of control characters and truncated.
+
+## Verdict table for other scanners
+
+`python3 scripts/verdict_table.py build` writes the ruleset as data: the algorithm, group, key-type,
+signature and cipher-suite names TLS and certificate scanners report (every TLS cipher suite OpenSSL 3.5
+knows, plus legacy ones), with verdicts under both profiles, migration targets and sources, generated by the
+same code that writes policy results. Where a verdict depends on key size, the table gives exact size bands
+(for example RSA below 2048 bits is broken); look up a certificate key by its key type and size, not its
+curve name. It is deterministic for a ruleset version, so its SHA-256
+identifies it. Each release publishes it as `verdicts.json`, so the current table is always at
+`https://github.com/fedlinllc/fedlin-pqc-toolkit/releases/latest/download/verdicts.json`. The format is fixed by
+[schemas/verdict-table-1.0.schema.json](schemas/verdict-table-1.0.schema.json). A name that is not in the
+table is unknown, never guessed. `python3 scripts/verdict_table.py lookup X25519MLKEM768 --profile nss`
+shows one entry.
 
 ## Access by mode
 
@@ -152,7 +274,7 @@ recorded and flagged when a date is missing or after 2030; they are never verifi
 PKI Consortium PQC Maturity Model (v1.0.1, vendored in `third_party/pkic-pqcmm`, MIT). It pre-fills the
 model's own response fields for the questions a CBOM can evidence (algorithms in use, where they are used,
 interoperability from an observed handshake, inventory completeness, the classical-only client test for
-zero-legacy operation, non-quantum-safe features, a draft
+zero-legacy operation, features that are not quantum-resistant, a draft
 harvest-now-decrypt-later register, hybrid use, CMVP candidates, identifiers) and marks where each value came
 from: observed, derived, snapshot, or vendor-stated.
 
@@ -160,6 +282,37 @@ It does not award a maturity level or mark any criterion met. The PQCMM assesses
 observes one deployment, so a capability shown holds only for that configuration, and every criterion is
 left for an assessor. The one conclusion it draws is a contradiction: if quantum-resistant algorithms are
 observed, the Level 0 criterion "no quantum-safe algorithm available" does not hold.
+
+## Terminology: "quantum-resistant", not "quantum-safe"
+
+The toolkit's own code, output and documentation say **quantum-resistant** (or "post-quantum") and never
+"quantum-safe" or "safe". An algorithm is resistant to the attacks known today; "safe" claims a guarantee
+no standard makes. NIST, CISA and NSA likewise use "quantum-resistant".
+
+- Verdicts are `quantum_vulnerable` true or false, and a resistant algorithm is "quantum-resistant".
+- Third-party text is quoted as written. The PKI Consortium PQC Maturity Model says "quantum-safe" in its
+  questions and criteria, and those quotations keep its wording inside quotation marks.
+- `tests/test_terminology.py` fails the build if "quantum-safe" appears in the toolkit's own text outside
+  a quotation.
+
+## Requirements and footprint
+
+| | |
+|---|---|
+| Python | 3.9 or later, standard library only (CI tests 3.9 and 3.12; 3.9 is the UBI 9 runtime in the image) |
+| Platform | `setup.sh` and the images target Linux x86-64. The endpoint scan itself needs only Python and OpenSSL |
+| Optional | Podman (probe image, cbomkit-theia), Node.js via pnpm (cdxgen), `oc` or `kubectl` (cluster mode) |
+| Writes | Only the output files you name and, after `setup.sh`, `bin/` and `node_modules/` inside the repository |
+
+**What leaves the host.** Endpoint mode connects only to the hosts you list: TLS handshakes, typically 60 to 100 per
+endpoint with enumeration and at most about 170 (`--no-enumerate` and `--no-classical-probe` reduce that to a
+few). Cluster mode talks to your cluster's API server.
+`--repo` runs cdxgen, which can contact package registries to resolve dependencies. `setup.sh` and image
+builds download the pinned tools. Classification, reports, the CMVP check (a dated snapshot in the
+repository) and the MCP server make no network connections. Nothing is sent to FEDLIN.
+
+**Uninstall.** Delete the repository folder (it holds `bin/` and `node_modules/`), and remove the images
+with `podman rmi localhost/fedlin-kex-probe:0.1` and, if pulled, `ghcr.io/fedlinllc/fedlin-pqc-toolkit`.
 
 ## Known limits
 
@@ -172,6 +325,8 @@ Stated so a result is not read as more than it is:
 - Not yet covered: IPsec/VPN, Kerberos, code signing, cloud KMS, database encryption at rest.
 - Windows AD CS template verdicts have been checked by logic inspection; a full Windows CBOM has not yet
   been run end to end through the policy stage.
+- The hosted quick check on fedlin.com does not yet read the verdict table, so its verdicts can differ
+  from a toolkit run until it does.
 - CycloneDX 1.6 output is read as a legacy carrier by the PKIC validator; CycloneDX 2.0 export follows
   the 2.0 release.
 - The PKI Consortium CBOM profiles are working-group drafts (`pkic.example` identifiers). "Conforms" means
@@ -188,11 +343,15 @@ python3 -I -m unittest discover -s tests -v
 Standard library only and offline. The suite includes the PKI Consortium CBOM validator (vendored in
 `third_party/pkic-cbom`), which must report CONFORMS for the entry profile.
 
-## Versions
+## Versions and stability
 
-Releases are tagged `vMAJOR.MINOR.PATCH` and listed in [CHANGELOG.md](CHANGELOG.md). The toolkit version
+Releases are tagged `vMAJOR.MINOR.PATCH` and listed in [CHANGELOG.md](CHANGELOG.md) (0.x releases in
+[CHANGELOG-0.x.md](CHANGELOG-0.x.md)). The toolkit version
 is stamped in each CBOM and printed by `python3 scripts/tier2_pipeline.py --version`; the ruleset version
-is stamped in each policy result, and every verdict change is explained in [CORRECTIONS.md](CORRECTIONS.md).
+is stamped in each policy result and verdict table, and every verdict change is explained in
+[CORRECTIONS.md](CORRECTIONS.md). From 1.0.0 the machine-readable outputs (CBOM property names, policy
+result, `summary.json`, verdict table, CLI flags and exit codes, MCP tools) follow the promise in
+[STABILITY.md](STABILITY.md); verdicts and report wording are not part of it.
 
 ## Supply chain
 

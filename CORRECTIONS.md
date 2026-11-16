@@ -4,6 +4,18 @@ Every change to a verdict, a cited date or a public claim is recorded here with 
 wrong, what it is now, and the source that settled it. Verdicts come from `scripts/cnsa20_ruleset.py`;
 each rule cites a source key defined in `SOURCES` in that file.
 
+## 2026-11-15: ruleset 1.0.3 (pressure test and competitive benchmark)
+
+| Identifier | Was (1.0.2) | Now (1.0.3) | Source |
+|---|---|---|---|
+| RSA signature names (`sha256WithRSAEncryption`, `RSASSA-PSS`, `rsa-sha2-256`, ...) | Public-key encryption, public-key lane, target "ML-KEM / ML-DSA" | Signature, signature lane, target ML-DSA or SLH-DSA (civilian) / ML-DSA-87 (nss); quantum-vulnerable, High, unchanged | FIPS204, FIPS205, CNSA2 |
+| RSA, DSA, DH below 2048 bits; EC below 224 bits | Note said "broken today" | Note says below 112-bit security and disallowed by SP 800-131A; status unchanged (Critical) | SP800-57, SP800-131A |
+| Anonymous (`ADH-*`, `AECDH-*`, `TLS_DH_anon_*`) and NULL-encryption suites (`*-NULL-*`) | Read as their cipher (compliant) or key exchange (High), some unclassified | Broken, Critical: no server authentication or no encryption | n/a |
+| LMS, XMSS | Note named firmware/code signing for LMS only | Both notes state CNSA 2.0 approves them for software and firmware signing only; verdict unchanged | CNSA2 |
+
+Report appendix: the status column now uses the policy result's words (compliant, transitional, vulnerable,
+broken, review). It showed TLS 1.2 as "resistant" while the policy result said "transitional".
+
 ## 2026-11-14: ruleset 1.0.0 (replaces 0.2)
 
 Found by running real-world identifiers through `classify()` (now `tests/test_ruleset.py`).

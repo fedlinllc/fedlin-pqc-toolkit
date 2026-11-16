@@ -377,7 +377,7 @@ def report_md(res):
             L += [f"## {phase}", "", "| # | Question | Type | Answer | Evidence | Check |", "|---|---|---|---|---|---|"]
         a = A.get(q["id"]) or {}
         r = res["results"].get(q["id"])
-        chk = f"**{r['status']}**: {r['detail']}" if r else "—"
+        chk = f"**{r['status']}**: {r['detail']}" if r else "-"
         ev = "; ".join(a.get("evidence") or []) or "none cited"
         txt = (a.get("answer") or "").strip() or "*unanswered*"
         L.append(f"| {q['id']} | {_cell(q['question'])} | {q['claim_type']} | {_cell(txt[:400])} | {_cell(ev[:200])} | {_cell(chk)} |")

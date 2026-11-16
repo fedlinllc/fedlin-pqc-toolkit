@@ -1,0 +1,222 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://github.com/fedlinllc/fedlin-pqc-toolkit/schemas/verdict-table-1.0.schema.json",
+ "title": "fedlin.pqc-verdict-table 1.0",
+ "description": "The toolkit ruleset as data. Stable within toolkit 1.x: fields may be added, none removed or renamed.",
+ "type": "object",
+ "required": [
+  "schema",
+  "schemaVersion",
+  "ruleset",
+  "profiles",
+  "statuses",
+  "lookup",
+  "sources",
+  "index",
+  "bands",
+  "entries"
+ ],
+ "properties": {
+  "schema": {
+   "const": "fedlin.pqc-verdict-table"
+  },
+  "schemaVersion": {
+   "const": "1.0"
+  },
+  "ruleset": {
+   "type": "object",
+   "required": [
+    "policyId",
+    "version",
+    "file",
+    "digest"
+   ],
+   "properties": {
+    "policyId": {
+     "type": "string"
+    },
+    "version": {
+     "type": "string",
+     "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "file": {
+     "type": "string"
+    },
+    "digest": {
+     "type": "object",
+     "required": [
+      "alg",
+      "value"
+     ],
+     "properties": {
+      "alg": {
+       "const": "SHA-256"
+      },
+      "value": {
+       "type": "string",
+       "pattern": "^[0-9a-f]{64}$"
+      }
+     }
+    }
+   }
+  },
+  "profiles": {
+   "type": "object",
+   "required": [
+    "civilian",
+    "nss"
+   ],
+   "additionalProperties": {
+    "type": "string"
+   }
+  },
+  "statuses": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "string"
+   }
+  },
+  "lookup": {
+   "type": "string"
+  },
+  "sources": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "string"
+   }
+  },
+  "index": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "string",
+    "pattern": "^e[0-9]+$"
+   },
+   "propertyNames": {
+    "pattern": "^[a-z0-9]+$"
+   },
+   "description": "Verdict for a name when its key size is unknown or does not matter."
+  },
+  "entries": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "id",
+     "canonical",
+     "family",
+     "parameter_set",
+     "bits",
+     "lane",
+     "primitive",
+     "nist_pqc_level",
+     "classically_broken",
+     "deprecated_after",
+     "disallowed_after",
+     "verdicts"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "pattern": "^e[0-9]+$"
+     },
+     "canonical": {
+      "type": "string"
+     },
+     "bits": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "classically_broken": {
+      "type": "boolean"
+     },
+     "verdicts": {
+      "type": "object",
+      "required": [
+       "civilian",
+       "nss"
+      ],
+      "additionalProperties": {
+       "type": "object",
+       "required": [
+        "status",
+        "quantum_vulnerable",
+        "target",
+        "priority",
+        "note",
+        "cite"
+       ],
+       "properties": {
+        "status": {
+         "enum": [
+          "compliant",
+          "transitional",
+          "vulnerable",
+          "broken",
+          "unclassified"
+         ]
+        },
+        "quantum_vulnerable": {
+         "type": [
+          "boolean",
+          "null"
+         ]
+        },
+        "target": {
+         "type": "string"
+        },
+        "priority": {
+         "type": "string"
+        },
+        "note": {
+         "type": "string"
+        },
+        "cite": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "bands": {
+   "type": "object",
+   "propertyNames": {
+    "pattern": "^[a-z0-9]+$"
+   },
+   "description": "For names whose verdict depends on key size: contiguous bit ranges in ascending order; maxBits null means no upper bound.",
+   "additionalProperties": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "minBits",
+      "maxBits",
+      "id"
+     ],
+     "properties": {
+      "minBits": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "maxBits": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "id": {
+       "type": "string",
+       "pattern": "^e[0-9]+$"
+      }
+     }
+    }
+   }
+  }
+ }
+}

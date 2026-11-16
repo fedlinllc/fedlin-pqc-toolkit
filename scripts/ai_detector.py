@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""FEDLIN PQC Toolkit — AI-BOM detector & builder (Phase 2, on the crypto rails).
+"""FEDLIN PQC Toolkit: AI-BOM detector & builder (Phase 2, on the crypto rails).
 
 The AI analogue of tier2_pipeline.py's CBOM builder: scans a directory tree for AI assets
 (models / datasets / pipelines), extracts governance signals, classifies each with the
 deterministic ai_governance_ruleset, and emits a schema-valid CycloneDX 1.6 ML-BOM whose
-components carry `ai:*` verdict properties — exactly analogous to the crypto CBOM's `cnsa2:*`.
+components carry `ai:*` verdict properties: exactly analogous to the crypto CBOM's `cnsa2:*`.
 
 Same rails as the crypto side: CycloneDX 1.6 serialization, the universal-overlay pattern,
 crosswalk-to-regime, and (via ai_report) a scorecard + governance roadmap + delta.
 
-DETERMINISTIC (Mode C): a fixed rule set over extracted signals — no AI at evaluation time.
+DETERMINISTIC (Mode C): a fixed rule set over extracted signals: no AI at evaluation time.
 Reads file metadata, extensions, and sidecar docs only; it does not load or execute any model.
 
 Verdicts are indicative and should be confirmed by an analyst before anyone relies on them.
@@ -24,6 +24,7 @@ import re
 import sys
 import uuid
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling modules, also under python -I
 import ai_governance_ruleset as ai
 import crosswalk
 
@@ -132,7 +133,7 @@ def detect(root):
                     "signals": [fn, rel],
                 })
             elif fl in PIPELINE_FILES or ext == "ipynb":
-                # one pipeline asset per directory — a dir with several pipeline files (e.g. train.py
+                # one pipeline asset per directory: a dir with several pipeline files (e.g. train.py
                 # AND dvc.yaml, or many notebooks) is a single training/MLOps pipeline, not many.
                 key = (dirpath, "pipeline")
                 if key in seen_pipeline_dirs:
@@ -209,7 +210,7 @@ def build_ai_bom(assets, system_name, regime=None, frameworks=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="AI-BOM detector — models/datasets/pipelines -> CycloneDX 1.6")
+    ap = argparse.ArgumentParser(description="AI-BOM detector: models/datasets/pipelines -> CycloneDX 1.6")
     ap.add_argument("--dir", required=True, help="project/model directory to scan")
     ap.add_argument("--out", default="out/ai-bom.json", help="output CycloneDX 1.6 AI-BOM")
     ap.add_argument("--name", default="ai-system", help="system name for the BOM metadata")
@@ -232,7 +233,7 @@ def main():
     n = {"model": 0, "dataset": 0, "pipeline": 0}
     for a in assets:
         n[a["kind"]] = n.get(a["kind"], 0) + 1
-    print(f"[ok] AI-BOM: {args.out} — {n['model']} model(s), {n['dataset']} dataset(s), "
+    print(f"[ok] AI-BOM: {args.out}: {n['model']} model(s), {n['dataset']} dataset(s), "
           f"{n['pipeline']} pipeline(s); frameworks: {', '.join(frameworks) or 'none detected'}")
 
     if args.report:
@@ -244,7 +245,7 @@ def main():
             f.write(md + "\n")
         with open(summ, "w") as f:
             json.dump(summary, f, indent=2)
-        print(f"[ok] AI report: {rpt} — governance score {summary['governance_score']} "
+        print(f"[ok] AI report: {rpt}: governance score {summary['governance_score']} "
               f"({summary['grade']}), {summary['high_risk']} high-risk asset(s)")
 
     if args.validate and args.cyclonedx:

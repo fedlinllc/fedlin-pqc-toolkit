@@ -1,0 +1,108 @@
+# Release: runs when a version tag is pushed (event-driven; no schedule). It re-runs the tests, builds the
+# release files and the container image, attests them with Sigstore-signed SLSA build provenance, and
+# creates the GitHub release with every file attached, so anyone can verify what they download:
+#   gh attestation verify fedlin-pqc-toolkit-<version>.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+#   gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:<version> --repo fedlinllc/fedlin-pqc-toolkit
+# Actions are pinned by commit SHA.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write       # create the release and upload its files
+      packages: write       # push the image to GHCR
+      id-token: write       # Sigstore keyless signing for attestations
+      attestations: write
+      artifact-metadata: write   # lets the attest action record artifact storage metadata
+    env:
+      IMAGE: ghcr.io/fedlinllc/fedlin-pqc-toolkit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Tests
+        run: python -I -m unittest discover -s tests
+      - name: Version must match the tag
+        id: v
+        run: |
+          read -r _ ver _ rules <<<"$(python3 scripts/tier2_pipeline.py --version | tr -d '()')"
+          test "v$ver" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != toolkit $ver"; exit 1; }
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "ruleset=$rules" >> "$GITHUB_OUTPUT"
+      - name: Release files
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix="fedlin-pqc-toolkit-$VER/" -o "dist/fedlin-pqc-toolkit-$VER.tar.gz" "$GITHUB_REF_NAME"
+          # fixed name so the current table is always at .../releases/latest/download/verdicts.json;
+          # the ruleset version is inside the file
+          python3 scripts/verdict_table.py build --out dist/verdicts.json
+      - name: SBOM of the toolkit
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: dist/fedlin-pqc-toolkit-${{ steps.v.outputs.version }}.sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Provenance for the release files
+        id: prov
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/*
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the image
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Containerfile
+          push: true
+          provenance: false   # provenance comes from the attestation step below
+          tags: ${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/fedlinllc/fedlin-pqc-toolkit
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+      - name: Provenance for the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.v.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          BUNDLE: ${{ steps.prov.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" "dist/fedlin-pqc-toolkit-$VER.intoto.jsonl"   # as a release file, so Scorecard sees it
+          awk -v v="$VER" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Pre-release of the next version; see CHANGELOG.md (Unreleased)." > notes.md
+          {
+            echo
+            echo "**Container image:** \`$IMAGE@$DIGEST\`"
+            echo
+            echo "Verify any file or the image: \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`,"
+            echo "\`gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY\`."
+          } >> notes.md
+          pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease";; esac   # v1.2.3-rc.1 -> pre-release
+          gh release create "$GITHUB_REF_NAME" --verify-tag $pre --title "$GITHUB_REF_NAME" --notes-file notes.md dist/*

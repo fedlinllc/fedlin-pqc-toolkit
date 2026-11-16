@@ -13,7 +13,7 @@ class Capture(unittest.TestCase):
     def test_host_validation(self):
         for good in ("fedlin.com", "a.b-c.example", "10.0.0.1", "[::1]"):
             self.assertTrue(tp.valid_host(good), good)
-        for bad in ("a;b", "$(id).com", "`x`", "a b", "", "x" * 300):
+        for bad in ("a;b", "$(id).com", "`x`", "a b", "", "x" * 300, "a.b\n", "a.b\n:443"):
             self.assertFalse(tp.valid_host(bad), bad)
 
     def test_parse_endpoints_drops_invalid(self):

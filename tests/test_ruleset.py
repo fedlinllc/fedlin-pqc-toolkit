@@ -211,5 +211,21 @@ class Conventions(unittest.TestCase):
             r.classify("RSA", profile="fips")
 
 
+class RsaSignatures(unittest.TestCase):
+    """Ruleset 1.0.3: an RSA signature name is a signature, migrated to ML-DSA/SLH-DSA."""
+
+    def test_signature_lane_and_target(self):
+        for n in ("sha256WithRSAEncryption", "sha384WithRSAEncryption", "RSASSA-PSS", "rsa-sha2-256"):
+            v = r.classify(n, profile="civilian")
+            self.assertEqual((v["primitive"], v["lane"]), ("signature", "signature"), n)
+            self.assertTrue(v["cnsa_target"].startswith("ML-DSA (FIPS 204) or SLH-DSA"), n)
+            self.assertTrue(r.classify(n, profile="nss")["cnsa_target"].startswith("ML-DSA-87"), n)
+
+    def test_rsa_key_and_suites_unchanged(self):
+        self.assertEqual(r.classify("rsaEncryption", 2048)["lane"], "public-key")
+        self.assertEqual(r.classify("AES256-SHA")["lane"], "key-establishment")
+        self.assertIn("disallowed by SP 800-131A", r.classify("RSA", 1024)["note"])
+
+
 if __name__ == "__main__":
     unittest.main()

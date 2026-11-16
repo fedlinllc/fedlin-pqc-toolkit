@@ -155,7 +155,7 @@ class Downstream(unittest.TestCase):
         self.assertEqual([o for _, o, _ in rp.classical_fallback(bom)], ["accepted", "rejected"])
         md, summary = rp.build_report(bom)
         self.assertIn("## Classical fallback", md)
-        self.assertIn("| h1.example.com | rejected | — |", md)
+        self.assertIn("| h1.example.com | rejected | - |", md)
         self.assertEqual(summary["classical_fallback"], {"accepted": 1, "rejected": 1})
 
     def test_pqcmm_431(self):

@@ -1,4 +1,4 @@
-# fedlin-pqc-toolkit — pinned versions (v0.8.0)
+# fedlin-pqc-toolkit: pinned versions (v1.0.0-rc.1)
 # Reproducibility manifest. Update deliberately; the OCI image + setup.sh should match these.
 # Format: component = version/ref (source)
 
@@ -9,7 +9,7 @@ pnpm            = 10.34.9    # package.json packageManager pins sha512; installs
 
 [bundled-tools]
 cyclonedx-cli   = 0.32.0     # github.com/CycloneDX/cyclonedx-cli; linux-x64 sha256 454879e6a4a405c8a13bff49b8982adcb0596f3019b26b0811c66e4d7f0783e1 (matches GitHub asset digest)
-cdxgen          = 12.7.0     # npm @cyclonedx/cdxgen (pinned in package-lock.json)
+cdxgen          = 12.7.0     # npm @cyclonedx/cdxgen (pinned in pnpm-lock.yaml)
 cbomkit-theia   = 1ce8b4d946c699198efe95de287a61832c82dd74  # github.com/PQCA/cbomkit-theia (built from source, static)
 oc              = 4.22.0     # mirror.openshift.com openshift-client-linux-4.22.0.tar.gz sha256 b6e027b304678d55e89ea1e8fe5c89e832f9c1a73518a1846e8cf9601c647aef (from the mirror's sha256sum.txt)
 
@@ -34,7 +34,7 @@ pipeline        = 0.5        # scripts/tier2_pipeline.py (overlay/no-runtime/mer
 
 [source-scan]
 # CBOMkit + sonar-cryptography wired via the merge-ingest side-car (run out-of-band, --merge-cbom).
-# Not pinned into the OCI image on purpose — it's a compose+DB service; embedding it would break
+# Not pinned into the OCI image on purpose: it's a compose+DB service; embedding it would break
 # the portable single-container / air-gap design. Driven by scripts/run-cbomkit.sh.
 cbomkit         = external   # github.com/PQCA/cbomkit (compose: make production; API :8081)
 sonar-cryptography = external  # CBOMkit-hyperion scanner (Java/Python/Go source)

@@ -97,7 +97,7 @@ class ReportText(unittest.TestCase):
         self.assertNotIn("supersedes M-23-02", self.md)
         self.assertNotIn("schema-validated", self.md)
         self.assertNotRegex(self.md, r"CNSA 2\.0[^\n]*SLH-DSA")
-        self.assertNotRegex(self.md, r"\*\*NSM-10\*\* — PQC for key establishment")
+        self.assertNotRegex(self.md, r"\*\*NSM-10\*\*: PQC for key establishment")
 
     def test_no_roadmap_promise_without_roadmap(self):
         if report._roadmap is None:

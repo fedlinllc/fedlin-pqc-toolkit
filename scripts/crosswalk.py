@@ -1,10 +1,10 @@
-"""FEDLIN compliance crosswalk — v0.1.
+"""FEDLIN compliance crosswalk: v0.1.
 
 Maps the NIST 800-53 SC-family controls the toolkit emits to each vertical's
 regime, so the same CBOM speaks the buyer's dialect ("change the language, not the
 engine"). 800-53 is the spine; every regime crosswalks to it.
 
-STARTER MAPPINGS — analyst-verified per engagement. CMMC entries are the NIST
+STARTER MAPPINGS: analyst-verified per engagement. CMMC entries are the NIST
 800-171 practices (CMMC L2 = 800-171). NERC CIP is objective-based, not crypto-
 prescriptive, so there is no clean 1:1 crypto-control mapping; the NERC-CIP column
 below was reviewed against CIP-002/005/011/012 (2026-07-09) and firmed up where the
@@ -34,21 +34,21 @@ CROSSWALK = {
         "HIPAA": "164.312(a)(2)(iv) (encryption/key mgmt)",
         "PCI-DSS": "Req 3.6/3.7 (key management)",
         "GLBA": "16 CFR 314.4(c) (safeguards)",
-        "NERC-CIP": "CIP-011 (BES Cyber System Information protection) [approx — key mgmt not explicit in CIP]",
+        "NERC-CIP": "CIP-011 (BES Cyber System Information protection) [approx: key mgmt not explicit in CIP]",
     },
     "SC-13": {
         "FISMA": "SC-13", "CMMC": "SC.L2-3.13.11 (800-171 3.13.11, FIPS crypto)",
         "HIPAA": "164.312(a)(2)(iv) / 164.312(e)(2)(ii) (encryption)",
         "PCI-DSS": "Req 3 & 4 (strong cryptography)",
         "GLBA": "16 CFR 314.4(c)(3) (encryption)",
-        "NERC-CIP": "CIP-011 (BES Cyber System Information protection) [approx — CIP is not algorithm-prescriptive]",
+        "NERC-CIP": "CIP-011 (BES Cyber System Information protection) [approx: CIP is not algorithm-prescriptive]",
     },
     "SC-17": {
         "FISMA": "SC-17", "CMMC": "SC.L2-3.13.15 (800-171 3.13.15, session authenticity)",
         "HIPAA": "164.312(d) (person/entity authentication)",
         "PCI-DSS": "Req 4.2 (trusted certificates)",
         "GLBA": "16 CFR 314.4(c) (safeguards)",
-        "NERC-CIP": "CIP-005 R2 (encryption for Interactive Remote Access) [approx — cert/PKI has no direct CIP control]",
+        "NERC-CIP": "CIP-005 R2 (encryption for Interactive Remote Access) [approx: cert/PKI has no direct CIP control]",
     },
     "SC-28": {
         "FISMA": "SC-28", "CMMC": "SC.L2-3.13.16 (800-171 3.13.16, data at rest)",

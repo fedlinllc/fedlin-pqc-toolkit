@@ -1,7 +1,7 @@
 # dependencies (reinstall via setup.sh / npm ci)
 node_modules/
 
-# vendored binaries (fetched/built by setup.sh — large, not committed)
+# vendored binaries (fetched/built by setup.sh: large, not committed)
 bin/
 
 # air-gap image bundles

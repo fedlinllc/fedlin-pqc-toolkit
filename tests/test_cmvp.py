@@ -25,7 +25,7 @@ def lib(name, version="1.0", group="", purl=""):
 
 
 def os_comp(os_id, ver, fips="true", host="h1"):
-    return {"type": "operating-system", "name": f"{os_id} {ver} — {host}",
+    return {"type": "operating-system", "name": f"{os_id} {ver}: {host}",
             "properties": [{"name": "fedlin:hw_class", "value": "os"}, {"name": "fedlin:host", "value": host},
                            {"name": "fedlin:os_id", "value": os_id}, {"name": "fedlin:os_version_id", "value": ver},
                            {"name": "fedlin:fips_enabled", "value": fips}]}
@@ -71,7 +71,7 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(by["pure-js"]["kind"], "no-module")
 
     def test_hsm(self):
-        bom = {"components": [{"type": "device", "name": "HSM — h1 (Thales TCT Luna Network HSM)",
+        bom = {"components": [{"type": "device", "name": "HSM: h1 (Thales TCT Luna Network HSM)",
                                "properties": [{"name": "fedlin:hw_class", "value": "hsm"}]}]}
         f = cmvp.match(bom, self.snap, TODAY)
         self.assertEqual(f[0]["family"], "hsm-luna")

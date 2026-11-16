@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.2"
+RULESET_VERSION = "1.0.3"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -207,12 +207,13 @@ ALGORITHMS = {
                           "nss": "ML-DSA-87, or LMS/XMSS for firmware (CNSA 2.0)"}),
     "lms": _a("pqc", "signature", _SIG_FN, level=5, compliant=_BOTH, family="LMS",
               controls=["SC-13", "SC-17"], cite=["SP800-208", "CNSA2"],
-              note="Stateful hash-based signature (SP 800-208). CNSA 2.0 firmware/code-signing algorithm. "
-                   "State management is a deployment risk.",
+              note="Stateful hash-based signature (SP 800-208). CNSA 2.0 approves LMS and XMSS for software and "
+                   "firmware signing only. State management is a deployment risk.",
               target={"civilian": "None (SP 800-208)", "nss": "None (CNSA 2.0 firmware/code signing)"}),
     "xmss": _a("pqc", "signature", _SIG_FN, level=5, compliant=_BOTH, family="XMSS",
                controls=["SC-13", "SC-17"], cite=["SP800-208", "CNSA2"],
-               note="Stateful hash-based signature (SP 800-208). State management is a deployment risk.",
+               note="Stateful hash-based signature (SP 800-208). CNSA 2.0 approves LMS and XMSS for software and "
+                    "firmware signing only. State management is a deployment risk.",
                target={"civilian": "None (SP 800-208)", "nss": "None (CNSA 2.0 firmware/code signing)"}),
     "fn-dsa": _a("pqc", "signature", _SIG_FN, compliant=_NONE, family="FN-DSA", standard="pre-standard",
                  controls=["SC-13", "SC-17"], cite=["FN-DSA", "CNSA2"],
@@ -656,10 +657,13 @@ def normalize(name, bits=None):
                   and re.match(r"^(aes(128|256)?|camellia(128|256)?|aria(128|256)|des|rc4|idea|seed|null)$", toks[0])
                   and toks[-1] in ("sha", "sha256", "sha384", "md5")
                   and not set(toks) & {"psk", "srp", "kx", "ecdh", "dh", "anon", "adh", "aecdh"})
-    is_suite = is_suite or bool(static_rsa)
+    # Anonymous (ADH, AECDH: no server authentication) and NULL-encryption suites, in OpenSSL or IANA spelling
+    unprotected = len(toks) >= 2 and bool(set(toks) & {"adh", "aecdh", "anon", "null"}) and (
+        toks[-1] in ("sha", "sha256", "sha384", "md5") or c.startswith("tls"))
+    is_suite = is_suite or bool(static_rsa) or unprotected
     if is_suite:
         tok_set = set(toks)
-        if tok_set & {"null", "anon", "export", "exp"}:
+        if tok_set & {"null", "anon", "export", "exp", "adh", "aecdh"}:
             comps.append(("null-cipher", None, raw))
         if "ecdhe" in tok_set or "ecdh" in tok_set:
             comps.append(("ecdh", None, raw + " (key exchange)"))
@@ -832,6 +836,9 @@ def lane_of(canonical, primitive):
     return _LANE_BY_PRIMITIVE.get(primitive, "other")
 
 
+_RSA_SIG = re.compile(r"withrsa|rsassa|rsapss|^rsasha2|^sshrsa|^rsasha1")
+
+
 def _verdict_for(cid, bits, profile, label):
     a = ALGORITHMS[cid]
     strength = _strength(cid, bits)
@@ -845,10 +852,16 @@ def _verdict_for(cid, bits, profile, label):
         "deprecated_after": None, "disallowed_after": None,
         "lane": lane_of(cid, a["primitive"]),
     }
-    # Key-size-dependent breakage of quantum-vulnerable algorithms
+    # An RSA name that denotes a signature (sha256WithRSAEncryption, RSASSA-PSS, rsa-sha2-256, ssh-rsa) is a
+    # signature, migrated to ML-DSA/SLH-DSA, not public-key encryption.
+    if cid == "rsa" and _RSA_SIG.search(_compact(label or "")):
+        v.update(primitive="signature", crypto_functions=["sign", "verify"], lane="signature",
+                 note="Quantum-vulnerable RSA signature.")
+    # Key-size-dependent: below 112-bit security the algorithm is disallowed today (SP 800-131A)
     if kind == "qv" and strength is not None and strength < 112:
         kind = "broken"
-        v["note"] = a["note"] + f" {bits}-bit key is below 112-bit security (SP 800-57): broken today."
+        v["note"] = (v["note"] + f" {bits}-bit key is below 112-bit security (SP 800-57) and disallowed by "
+                     "SP 800-131A: replace now.")
         v["cite"] = sorted(set(v["cite"] + ["SP800-57", "SP800-131A"]))
 
     if kind == "broken":
@@ -866,7 +879,7 @@ def _verdict_for(cid, bits, profile, label):
         # scheme after 2030 regardless of strength (the draft deprecated only 112-bit strength).
         v["deprecated_after"] = 2030
         v["disallowed_after"] = 2035
-        sig = a["primitive"] == "signature" or cid in ("ed25519", "ed448", "eddsa")
+        sig = v["primitive"] == "signature" or cid in ("ed25519", "ed448", "eddsa")
         kem = a["primitive"] in ("key-agree",) or cid in ("x25519", "x448", "ecdh", "dh", "mqv")
         if profile == "nss":
             if sig:

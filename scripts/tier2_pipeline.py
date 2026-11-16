@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FEDLIN PQC Toolkit — runtime and endpoint capture -> CycloneDX 1.6 CBOM.
+"""FEDLIN PQC Toolkit: runtime and endpoint capture -> CycloneDX 1.6 CBOM.
 
 Live-endpoint, SSH and cluster-configuration cryptography has no turnkey CycloneDX
 generator, so this converts runtime captures into a tool-generated CBOM (optionally
@@ -23,6 +23,7 @@ import subprocess
 import sys
 import uuid
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling modules, also under python -I
 import cnsa20_ruleset as cnsa
 import policy as policymod
 import report as reportmod
@@ -47,7 +48,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "0.8.0"
+TOOLKIT_VERSION = "1.0.0-rc.1"
 
 
 def run(cmd, timeout=25):
@@ -64,10 +65,10 @@ def run(cmd, timeout=25):
 def detect_platform(kube="oc"):
     """Return 'openshift', 'kubernetes', or 'unreachable'.
 
-    Lets the runtime tier work on EKS/GKE/AKS/k3s (kubectl) — not just OpenShift (`oc`) — by
+    Lets the runtime tier work on EKS/GKE/AKS/k3s (kubectl): not just OpenShift (`oc`): by
     swapping Route capture for Ingress capture. Critically distinguishes a genuine non-OpenShift
     cluster from an unreachable/RBAC-limited one: if the API server serves NO resources at all,
-    we must not silently claim 'generic kubernetes' and capture nothing — we flag it.
+    we must not silently claim 'generic kubernetes' and capture nothing: we flag it.
     """
     api = run(f"{kube} api-resources -o name 2>/dev/null")
     if not api.strip():
@@ -98,7 +99,7 @@ def capture_context_generic(kube="kubectl"):
     """Cluster context for non-OpenShift kubernetes (EKS/GKE/AKS/k3s).
 
     OpenShift-only surfaces (clusterversion, apiserver encryption CR, ingresscontroller TLS profile)
-    are unavailable here — record the server version and the crypto signals that ARE portable
+    are unavailable here: record the server version and the crypto signals that ARE portable
     (HSM indicators), and leave the rest to Ingress + endpoint capture.
     """
     ctx = {"platform": "kubernetes"}
@@ -131,7 +132,7 @@ _CLI_RE = re.compile(r"^[A-Za-z0-9_./+-]{1,255}$")
 
 
 def valid_host(host):
-    return bool(host) and len(host) <= 253 and bool(_HOST_RE.match(host))
+    return bool(host) and len(host) <= 253 and bool(_HOST_RE.fullmatch(host)) and "\n" not in host
 
 
 def _hp(host, port):
@@ -335,22 +336,238 @@ def _probe_classical_only(host, port=443):
     return result(run(cmd + " 2>&1"), run("openssl version"), cmd, False)
 
 
+# ---------- endpoint enumeration (what the server accepts, not only what one client negotiated) ----------
+ENUMERATE = True  # cleared by --no-enumerate
+ENUM_PACE = 0.0   # seconds between enumeration handshakes (--enumerate-pace)
+NOT_CAPTURED = []  # endpoints that answered but completed no handshake with any scan client
+_ENUM_VERSIONS = (("TLSv1", "-tls1"), ("TLSv1.1", "-tls1_1"), ("TLSv1.2", "-tls1_2"), ("TLSv1.3", "-tls1_3"))
+_ENUM_TLS13_SUITES = ("TLS_AES_256_GCM_SHA384", "TLS_AES_128_GCM_SHA256", "TLS_CHACHA20_POLY1305_SHA256",
+                      "TLS_AES_128_CCM_SHA256", "TLS_AES_128_CCM_8_SHA256")
+_ENUM_GROUPS = ("X25519MLKEM768", "SecP256r1MLKEM768", "SecP384r1MLKEM1024", "MLKEM512", "MLKEM768", "MLKEM1024",
+                "X25519", "X448", "secp256r1", "secp384r1", "secp521r1", "ffdhe2048", "ffdhe3072", "ffdhe4096",
+                "ffdhe6144", "ffdhe8192")
+_ENUM_SIGALGS = (("RSA", "rsa_pss_rsae_sha256:rsa_pss_rsae_sha384:rsa_pss_rsae_sha512:rsa_pkcs1_sha256:"
+                         "rsa_pkcs1_sha384:rsa_pkcs1_sha512:rsa_pss_pss_sha256"),
+                 ("ECDSA", "ecdsa_secp256r1_sha256:ecdsa_secp384r1_sha384:ecdsa_secp521r1_sha512"),
+                 ("EdDSA", "ed25519:ed448"),
+                 ("ML-DSA", "mldsa44:mldsa65:mldsa87"))
+_ENUM_MAX_SUITES = 40  # per protocol version; a server accepting more is recorded as truncated
+_LEGACY = "'ALL:COMPLEMENTOFALL:@SECLEVEL=0'"
+# Alerts the server sends when it refuses what was offered. Received alerts print "SSL alert number N";
+# errors the client raises itself (e.g. "dh key too small") do not, and are never read as a server refusal.
+_SERVER_REFUSAL = re.compile(r"SSL alert number (40|47|70|71)\b")
+_VERSION_REFUSAL = re.compile(r"SSL alert number 70\b|alert protocol version")
+
+
+def _enum_script(binary, hp, sni, pace=0.0):
+    """POSIX sh that runs every enumeration handshake against one endpoint with one OpenSSL binary and prints
+    tagged lines only (no certificate bodies, no private data). Each handshake has its own 6 s timeout."""
+    o = f"timeout 6 {binary} s_client -connect {hp} -servername {sni}"
+    keep = ("grep -E '^(CONNECTED|New, |Negotiated TLS1.3 group|Peer Temp Key|Server Temp Key)|"
+            "^ *Protocol *:|alert|:error:'")
+    cert = (f"{binary} x509 -noout -subject -issuer -dates -fingerprint -sha256 -text 2>/dev/null | grep -E "
+            f"\"^(subject=|issuer=|notBefore=|notAfter=|sha256 Fingerprint=|SHA256 Fingerprint=)|"
+            f"Public Key Algorithm:|Public-Key:|Signature Algorithm:\" | head -12")
+    L = [f'echo "TOOL $({binary} version)"',
+         f'echo "=== DEFAULT"; echo | {o} 2>&1 | {keep}',
+         f'echo "=== LEGACY"; echo | {o} -cipher {_LEGACY} 2>&1 | {keep}']
+    for name, flag in _ENUM_VERSIONS:
+        sec = "" if name == "TLSv1.3" else f" -cipher {_LEGACY}"
+        L.append(f'echo "=== VERSION {name}"; echo | {o} {flag}{sec} 2>&1 | {keep}')
+    for suite in _ENUM_TLS13_SUITES:
+        L.append(f'echo "=== SUITE TLSv1.3 {suite}"; echo | {o} -tls1_3 -ciphersuites {suite} 2>&1 | {keep}')
+    for name, flag in _ENUM_VERSIONS[:3]:  # TLS 1.0-1.2: offer everything, remove what the server picks, repeat
+        L.append(f'list={_LEGACY}; n=0; out=""; while [ $n -lt {_ENUM_MAX_SUITES} ]; do '
+                 f'out=$(echo | {o} {flag} -cipher "$list" 2>&1); '
+                 f'c=$(printf "%s\\n" "$out" | sed -n "s/^New, [^,]*, Cipher is //p" | head -1); '
+                 f'case "$c" in ""|"(NONE)") break;; esac; '
+                 f'echo "=== ITER {name} $c"; printf "%s\\n" "$out" | {keep}; '
+                 f'list="$list:-$c"; n=$((n+1)); done; '
+                 f'if [ $n -ge {_ENUM_MAX_SUITES} ]; then echo "=== TRUNCATED {name}"; '
+                 f'elif [ $n -gt 0 ] && ! printf "%s\\n" "$out" | grep -q "SSL alert number"; then '
+                 f'echo "=== INCOMPLETE {name}"; fi')
+    for g in _ENUM_GROUPS:
+        L.append(f'echo "=== GROUP13 {g}"; echo | {o} -tls1_3 -groups {g} 2>&1 | {keep}')
+        if "mlkem" not in g.lower():  # classical groups are also offered in TLS 1.2 (ECDHE / RFC 7919 DHE)
+            L.append(f'echo "=== GROUP12 {g}"; echo | {o} -tls1_2 -cipher {_LEGACY} -groups {g} 2>&1 | {keep}')
+    for label, algs in _ENUM_SIGALGS:
+        L.append(f'echo "=== CERT {label}"; echo | {o} -cipher {_LEGACY} -sigalgs {algs} 2>/dev/null | {cert}')
+    L.append(f'echo "=== CERT ANY"; echo | {o} -cipher {_LEGACY} 2>/dev/null | {cert}')
+    if pace and pace > 0:
+        gap = f"; sleep {float(pace):g}; "
+        L = [x.replace("n=$((n+1)); done", f"n=$((n+1)); sleep {float(pace):g}; done") for x in L]
+        return gap.join(L)
+    return "; ".join(L)
+
+
+def _parse_enum(out):
+    """Tagged enumeration output -> facts.
+
+    accepted (True) only when the handshake completed (and, for a group, on that group); refused (False)
+    only when the server sent a refusal alert (for a protocol version, the protocol_version alert);
+    otherwise None: no answer, or not testable with this client (e.g. the server's only suites are ones the
+    client does not implement). None is never read as refused."""
+    sections, cur = {}, None
+    for line in out.splitlines():
+        if line.startswith("=== "):
+            cur = line[4:].strip()
+            sections[cur] = []
+        elif line.startswith("TOOL "):
+            sections["TOOL"] = [line[5:].strip()]
+        elif cur:
+            sections[cur].append(line)
+    text = lambda k: "\n".join(sections.get(k, []))  # noqa: E731
+    res = {"tool": (sections.get("TOOL") or ["openssl"])[0], "versions": {}, "suites": {}, "groups": {},
+           "dh_bits": [], "certs": [], "truncated": [], "incomplete": []}
+    for key in ("default", "legacy"):
+        t = text(key.upper())
+        proto, cipher = _parse_session(t)
+        res[key] = {"protocol": proto, "cipher": cipher, "group": _parse_kex_group(t) if cipher else None}
+
+    res["version_sessions"] = {}
+    for name, _ in _ENUM_VERSIONS:
+        k = f"VERSION {name}"
+        if k in sections:
+            t = text(k)
+            p_, c_ = _parse_session(t)
+            res["versions"][name] = True if c_ else (False if _VERSION_REFUSAL.search(t) else None)
+            if c_:
+                res["version_sessions"][name] = {"protocol": p_ or name, "cipher": c_, "group": _parse_kex_group(t)}
+    # did the server answer at all (TCP + a TLS alert), even if no handshake completed with these clients?
+    res["server_answered"] = any("CONNECTED(" in "\n".join(v) and _SERVER_REFUSAL.search("\n".join(v))
+                                 for v in sections.values())
+    group_states = {}
+    for k in sections:
+        if k.startswith("SUITE TLSv1.3 ") and _parse_session(text(k))[1]:
+            res["suites"].setdefault("TLSv1.3", []).append(k.split()[-1])
+        elif k.startswith("ITER "):
+            _, ver, suite = k.split(" ", 2)
+            res["suites"].setdefault(ver, []).append(suite)
+            m = re.search(r"(?:Peer|Server) Temp Key:\s*DH,\s*(\d+) bits", text(k))
+            if m:
+                res["dh_bits"].append(int(m.group(1)))
+        elif k.startswith("TRUNCATED "):
+            res["truncated"].append(k.split()[-1])
+        elif k.startswith("INCOMPLETE "):
+            res["incomplete"].append(k.split()[-1])
+        elif k.startswith(("GROUP13 ", "GROUP12 ")):
+            g = k.split()[-1]
+            t = text(k)
+            got = _parse_kex_group(t)
+            if _parse_session(t)[1]:
+                same = got and (got.lower() == g.lower() or g.lower() in _GROUP_ALIASES.get(got.lower(), ()))
+                state = True if same else None  # completed without that group (e.g. static RSA): no evidence
+            else:
+                state = False if _SERVER_REFUSAL.search(t) else None
+            group_states.setdefault(g, []).append(state)
+        elif k.startswith("CERT "):
+            c = _parse_cert_text(text(k))
+            if c:
+                c["requested"] = k.split(" ", 1)[1]
+                if not any(x["fingerprint"] == c["fingerprint"] for x in res["certs"]):
+                    res["certs"].append(c)
+    for g, states in group_states.items():
+        # accepted in any version; refused only if every tested version refused it
+        res["groups"][g] = True if True in states else (False if states and all(x is False for x in states) else None)
+    res["dh_bits"] = sorted(set(res["dh_bits"]))
+    return res
+
+
+# OpenSSL reports some groups under other names (Temp Key lines)
+_GROUP_ALIASES = {"prime256v1": ("secp256r1",), "secp256r1": ("secp256r1",), "secp384r1": ("secp384r1",),
+                  "secp521r1": ("secp521r1",), "x25519": ("x25519",), "x448": ("x448",)}
+
+
+def _parse_cert_text(t):
+    def g(pat):
+        m = re.search(pat, t, re.M)
+        return m.group(1).strip() if m else None
+    fp = g(r"(?i)sha256 Fingerprint=(\S+)")
+    if not fp:
+        return None
+    bits = g(r"Public-Key:\s*\((\d+)\s*bit\)")
+    return {"fingerprint": fp.replace(":", "").lower(), "subject": g(r"^subject=(.*)$"), "issuer": g(r"^issuer=(.*)$"),
+            "not_before": _rfc3339(g(r"^notBefore=(.*)$")), "not_after": _rfc3339(g(r"^notAfter=(.*)$")),
+            "key_alg": g(r"Public Key Algorithm:\s*(\S+)") or "unparsed-public-key-algorithm",
+            "key_bits": int(bits) if bits else None, "sig_alg": g(r"Signature Algorithm:\s*(\S+)")}
+
+
+def _enum_client():
+    """The OpenSSL to enumerate with: one that can offer legacy versions and ML-KEM groups (not FIPS mode).
+    Returns (runner, label) or (None, reason)."""
+    if "SSL_CONF_cmd" not in run("echo | timeout 3 openssl s_client -connect 127.0.0.1:9 -groups X25519MLKEM768 2>&1"):
+        return (lambda script: run(script, timeout=900)), "host"
+    probe = os.environ.get("FEDLIN_KEX_PROBE_OPENSSL", "")
+    if probe and os.path.isfile(probe) and os.access(probe, os.X_OK):
+        return (lambda script: run(script.replace("{OPENSSL}", shlex.quote(probe)), timeout=900)), "bundled"
+    img = os.environ.get("FEDLIN_KEX_PROBE_IMAGE", "") or _default_probe_image()
+    if img:
+        def runner(script):
+            try:
+                p = subprocess.run(["podman", "run", "--rm", "--pull=never", img, "sh", "-c", script],
+                                   capture_output=True, text=True, timeout=900)
+                return p.stdout
+            except Exception as e:
+                sys.stderr.write(f"[warn] enumeration container: {e}\n")
+                return ""
+        return runner, "container"
+    return None, "no OpenSSL able to offer legacy versions and ML-KEM groups (FIPS host without probe image)"
+
+
+def _extra_certificates(c):
+    """Certificates the endpoint serves besides the one the default handshake returned (e.g. an RSA
+    certificate next to an ECDSA one), from enumeration. Matched on key type, size, signature and expiry."""
+    en = c.get("enumeration") or {}
+    out = []
+    for x in en.get("certs", []) or []:
+        if c.get("fingerprint"):
+            same = x.get("fingerprint") == c["fingerprint"]
+        else:
+            same = (x.get("key_alg"), x.get("key_bits"), x.get("sig_alg"), x.get("not_after")) == \
+                   (c.get("key_alg"), c.get("key_bits"), c.get("sig_alg"), c.get("not_after"))
+        if not same:
+            out.append(dict(x, host=c["host"]))
+    return out
+
+
+def enumerate_endpoint(host, port=443):
+    """Every accepted protocol version, cipher suite, key-exchange group and served certificate type.
+    Facts only; the policy stage judges them. Returns None when enumeration is off."""
+    if not ENUMERATE:
+        return None
+    runner, how = _enum_client()
+    if runner is None:
+        return {"status": "untested", "reason": how}
+    hp, h = _hp(host, port)
+    binary = "{OPENSSL}" if how == "bundled" else "openssl"
+    res = _parse_enum(runner(_enum_script(binary, hp, h, ENUM_PACE)))
+    res["status"], res["client"] = "complete", how
+    if not any(v is True for v in res["versions"].values()):
+        res["status"] = "untested"  # no handshake completed at all
+    return res
+
+
 def capture_cert(host, port=443):
     if not valid_host(host):
         sys.stderr.write(f"[warn] endpoint {host!r}: not a valid hostname or IP, skipped\n")
         return None
     hp, h = _hp(host, port)
     base = f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} 2>/dev/null | openssl x509 -noout"
-    meta = run(base + " -subject -issuer -dates")
+    meta = run(base + " -subject -issuer -dates -fingerprint -sha256")
     text = run(base + " -text")
     if not text:
-        return None
+        # The host OpenSSL could not complete a handshake (e.g. FIPS mode against a server that only speaks
+        # TLS 1.0 or legacy suites). Those are the endpoints that matter most: capture them with the
+        # enumeration client instead of dropping them as unreachable.
+        return _capture_via_enumeration(host, port)
+
     def grab(pat, s):
         m = re.search(pat, s)
         return m.group(1).strip() if m else None
     key_bits = grab(r"Public-Key:\s*\((\d+)\s*bit\)", text)
     key_alg = grab(r"Public Key Algorithm:\s*(\S+)", text)
     sig_alg = grab(r"Signature Algorithm:\s*(\S+)", text)
+    fp = grab(r"(?i)sha256 Fingerprint=(\S+)", meta)
     chain = run(f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} "
                 f"-showcerts 2>/dev/null | grep -c 'BEGIN CERTIFICATE'")
     tls_protocol, tls_cipher = _parse_session(
@@ -364,6 +581,25 @@ def capture_cert(host, port=443):
                        f"SecP256r1MLKEM768/SecP384r1MLKEM1024 and negotiated {kex_group} with this client")
         kex_group = None
     classical_only = _probe_classical_only(host, port) if CLASSICAL_PROBE else None
+    enumeration = enumerate_endpoint(host, port)
+    if enumeration and enumeration.get("status") == "complete":
+        d = _enum_session(enumeration)
+        if not tls_cipher:
+            # A FIPS-mode host OpenSSL can fail a TLS 1.2 handshake (e.g. no extended master secret); the
+            # enumeration client's handshake is the observed session then.
+            tls_protocol, tls_cipher = tls_protocol or d.get("protocol"), d.get("cipher")
+        if not kex_group and not kex_partial and d.get("group"):
+            kex_group, kex_probe_via = d["group"], f"enumeration client ({enumeration.get('client')})"
+    if not kex_group and not kex_partial and classical_only and classical_only.get("group") and enumeration \
+            and enumeration.get("status") == "complete" and enumeration.get("groups") \
+            and not any(ok for g, ok in enumeration["groups"].items() if "mlkem" in g.lower()) \
+            and all(ok is False for g, ok in enumeration["groups"].items() if "mlkem" in g.lower()):
+        # The server refused every ML-KEM group, so a full-offer client gets a classical group too; the group the
+        # classical-only handshake negotiated is an observed key exchange for this endpoint.
+        kex_group, kex_probe_via = classical_only["group"], "classical-probe (server refused every ML-KEM group)"
+    if not tls_cipher and classical_only and classical_only.get("cipher"):
+        # e.g. a server that requests a client certificate: the classical probe saw its session parameters
+        tls_protocol, tls_cipher = tls_protocol or classical_only.get("protocol"), classical_only.get("cipher")
     return {
         "host": host if port == 443 else f"{host}:{port}",
         "subject": grab(r"subject=(.*)", meta),
@@ -381,6 +617,51 @@ def capture_cert(host, port=443):
         "kex_probe_via": kex_probe_via,
         "kex_partial": kex_partial,
         "classical_only": classical_only,
+        "enumeration": enumeration,
+        "fingerprint": fp.replace(":", "").lower() if fp else None,
+    }
+
+
+def _enum_session(en):
+    """The session the enumeration observed: the modern default offer, else the legacy offer, else the
+    highest protocol version that completed."""
+    for k in ("default", "legacy"):
+        if (en.get(k) or {}).get("cipher"):
+            return en[k]
+    vs = en.get("version_sessions") or {}
+    for name, _ in reversed(_ENUM_VERSIONS):
+        if name in vs:
+            return vs[name]
+    return {}
+
+
+def _capture_via_enumeration(host, port):
+    """Certificate and session from the enumeration client, for endpoints the host OpenSSL cannot reach."""
+    if not ENUMERATE:
+        return None
+    en = enumerate_endpoint(host, port)
+    if en and en.get("status") != "complete" and en.get("server_answered"):
+        hp_ = host if port == 443 else f"{host}:{port}"
+        return {"host": hp_, "no_handshake": "the server answered but refused every handshake from the scan clients; "
+                                              "it may offer only suites they do not implement (3DES, RC4, export)"}
+    if not en or en.get("status") != "complete" or not en.get("certs"):
+        return None
+    certs = en["certs"]
+    primary = next((c for c in certs if c.get("requested") == "ANY"), certs[0])
+    sess = _enum_session(en)
+    classical_only = _probe_classical_only(host, port) if CLASSICAL_PROBE else None
+    grp = sess.get("group")
+    return {
+        "host": host if port == 443 else f"{host}:{port}",
+        "subject": primary.get("subject"), "issuer": primary.get("issuer"),
+        "not_before": primary.get("not_before"), "not_after": primary.get("not_after"),
+        "key_alg": primary.get("key_alg") or "unparsed-public-key-algorithm", "key_bits": primary.get("key_bits"),
+        "sig_alg": primary.get("sig_alg"), "chain_depth": None,
+        # the enumeration client offers every group; what it negotiated is the endpoint's key exchange
+        "kex_group": grp, "tls_protocol": sess.get("protocol"), "tls_cipher": sess.get("cipher"),
+        "kex_probe_via": f"enumeration client ({en.get('client')}); the host OpenSSL could not connect",
+        "kex_partial": None, "classical_only": classical_only, "enumeration": en,
+        "fingerprint": primary.get("fingerprint"),
     }
 
 
@@ -413,12 +694,18 @@ def capture_ingress(kube="kubectl"):
     return capture_endpoints(hosts)  # same bounded thread pool as --endpoints
 
 
+def _canon_endpoint(tok):
+    """host:443 and host name the same endpoint (one TLS interface, unique bom-refs)."""
+    h, sep, p = tok.rpartition(":")
+    return h if sep and p == "443" and ":" not in h else tok
+
+
 def parse_endpoints(values):
     """Expand --endpoints values into a deduped, order-preserving list of host[:port] tokens.
 
     Each value is either a path to a file (one endpoint per line, '#' comments allowed) or an
     inline comma/space-separated list. Tokens are normalized: scheme and path are stripped, so
-    'https://mail.agency.gov/owa' -> 'mail.agency.gov'. This is the no-cluster on-ramp — the
+    'https://mail.agency.gov/owa' -> 'mail.agency.gov'. This is the no-cluster on-ramp: the
     modal thin-footprint agency hands over a list of hostnames, not a kubeconfig.
     """
     tokens, out, seen = [], [], set()
@@ -434,9 +721,15 @@ def parse_endpoints(values):
     for t in tokens:
         t = re.sub(r"^[a-zA-Z]+://", "", t.strip())  # strip scheme
         t = t.split("/", 1)[0]                        # strip any path
+        m = re.match(r"^\[([0-9A-Fa-f:.]+)\](?::(\d+))?$", t)  # [IPv6] or [IPv6]:port
+        if m:
+            host = "[" + m.group(1) + "]"
+            t = host if not m.group(2) or m.group(2) == "443" else f"{host}:{m.group(2)}"
+        else:
+            t = _canon_endpoint(t)
+            host = t.rsplit(":", 1)[0] if t.count(":") == 1 else t
         if not t or t in seen:
             continue
-        host = t.rsplit(":", 1)[0] if t.count(":") == 1 or t.startswith("[") else t
         if not valid_host(host):
             sys.stderr.write(f"[warn] --endpoints: {t!r} is not a valid hostname or IP, skipped\n")
             continue
@@ -448,7 +741,7 @@ def parse_endpoints(values):
 def capture_endpoints(hosts, workers=16):
     """Live TLS cert capture over an explicit host[:port] list (no cluster needed).
 
-    Reuses capture_cert (public certificate metadata only — never a private key or secret value),
+    Reuses capture_cert (public certificate metadata only: never a private key or secret value),
     so it inherits the same no-secret-values contract as the cluster-route path.
 
     Parallelized: the per-host cost is an I/O-bound openssl handshake (and unreachable hosts sit
@@ -464,6 +757,10 @@ def capture_endpoints(hosts, workers=16):
         if sep and p.isdigit():
             host, port = h, int(p)
         c = capture_cert(host, port)
+        if c and c.get("no_handshake"):
+            sys.stderr.write(f"[warn] endpoint {tok}: {c['no_handshake']}\n")
+            NOT_CAPTURED.append(f"{c['host']}: {c['no_handshake']}")
+            return None
         if not c:
             sys.stderr.write(f"[warn] endpoint {tok}: no TLS certificate retrieved "
                              f"(unreachable, or no TLS on :{port})\n")
@@ -494,7 +791,7 @@ def _int(s):
 
 
 def capture_fips(kube="oc", platform="openshift", debug_image=""):
-    """Best-effort node FIPS check. INTRUSIVE — spins a short-lived debug pod; gated behind --deep.
+    """Best-effort node FIPS check. INTRUSIVE: spins a short-lived debug pod; gated behind --deep.
 
     Uses `oc debug node` on OpenShift; falls back to `kubectl debug node` (k8s 1.20+) elsewhere.
     """
@@ -518,7 +815,7 @@ def capture_fips(kube="oc", platform="openshift", debug_image=""):
 def read_local_fips():
     """FIPS mode of the environment the scan itself runs in (this host / in-boundary container).
 
-    Non-intrusive read of the local kernel flag — no cluster needed. In endpoint/no-runtime mode
+    Non-intrusive read of the local kernel flag: no cluster needed. In endpoint/no-runtime mode
     there is no cluster node to probe, but recording whether the assessment *executed* under FIPS is
     real RMF evidence (SC-13). Labelled 'scan host' to distinguish it from the scanned target's FIPS,
     which an endpoint scan cannot observe.
@@ -614,13 +911,15 @@ class CBOM:
         self._algo_refs[key] = ref
         return ref
 
-    def add_certificate(self, c):
-        ref = f"crypto/cert/{slug(c['host'])}"
+    def add_certificate(self, c, extra=None):
+        """extra: label of an additional certificate the same endpoint serves (e.g. "RSA" next to ECDSA)."""
+        ref = f"crypto/cert/{slug(c['host'])}" + (f"-{slug(extra)}-{c['fingerprint'][:12]}" if extra else "")
         key_ref = self.algo_ref(c["key_alg"], c.get("key_bits"))
         deps = [key_ref]
-        self._cert_algos[c["host"]] = [(key_ref, c["key_alg"])] + (
-            [(None, c["sig_alg"])] if c.get("sig_alg") else [])
-        self._cert_bits[c["host"]] = c.get("key_bits")
+        if not extra:
+            self._cert_algos[c["host"]] = [(key_ref, c["key_alg"])] + (
+                [(None, c["sig_alg"])] if c.get("sig_alg") else [])
+            self._cert_bits[c["host"]] = c.get("key_bits")
         cp = {
             "subjectName": c.get("subject") or "unknown",
             "issuerName": c.get("issuer") or "unknown",
@@ -629,7 +928,8 @@ class CBOM:
         }
         if c.get("sig_alg"):
             sig_ref = self.algo_ref(c["sig_alg"])
-            self._cert_algos[c["host"]][-1] = (sig_ref, c["sig_alg"])
+            if not extra:
+                self._cert_algos[c["host"]][-1] = (sig_ref, c["sig_alg"])
             cp["signatureAlgorithmRef"] = sig_ref
             deps.append(sig_ref)
         if c.get("not_before"):
@@ -637,16 +937,24 @@ class CBOM:
         if c.get("not_after"):
             cp["notValidAfter"] = c["not_after"]
         comp = {
-            "type": "cryptographic-asset", "bom-ref": ref, "name": c["host"],
+            "type": "cryptographic-asset", "bom-ref": ref,
+            "name": c["host"] + (f" ({extra} certificate)" if extra else ""),
             "cryptoProperties": {"assetType": "certificate", "certificateProperties": cp},
         }
+        props = []
         if c.get("chain_depth"):
-            comp["properties"] = [{"name": "fedlin:chain_depth", "value": str(c["chain_depth"])}]
+            props.append({"name": "fedlin:chain_depth", "value": str(c["chain_depth"])})
+        if extra:
+            props += [{"name": "fedlin:host", "value": c["host"]},
+                      {"name": "fedlin:certificateSelectedBy", "value": f"client offering {extra} signature schemes only"},
+                      {"name": "fedlin:sha256Fingerprint", "value": c["fingerprint"]}]
+        if props:
+            comp["properties"] = props
         self.components.append(comp)
         self.dependencies.append({"ref": ref, "dependsOn": deps})
 
     def add_tls_kex(self, host, kex_group=None, protocol=None, cipher=None, kex_partial=None,
-                    classical_only=None):
+                    classical_only=None, enumeration=None):
         """Add one TLS interface per endpoint: negotiated version, cipher suite, key exchange.
 
         Shaped for the PKI Consortium CBOM interface profiles: the asset is a 'service' interface
@@ -655,7 +963,7 @@ class CBOM:
         not observe is declared 'unknown' rather than left silent. Session properties are scored
         separately from the certificate's algorithms; the version is the one actually negotiated.
         """
-        if not (kex_group or protocol or cipher):
+        if not (kex_group or protocol or cipher or (enumeration or {}).get("status") == "complete"):
             return
         deps = []
         for name in (kex_group, cipher, protocol):
@@ -703,6 +1011,35 @@ class CBOM:
         props.append({"name": P + "disclosure:implementationPurl", "value": "unknown"})
         if kex_partial:
             props.append({"name": "fedlin:kex_partial_evidence", "value": kex_partial})
+        en = enumeration or {}
+        if en.get("status"):
+            # What the server accepts, from separate handshakes (facts; the policy stage judges them).
+            props.append({"name": "fedlin:enumeration", "value": en["status"]})
+            if en.get("status") == "complete":
+                props.append({"name": "fedlin:enumerationTool", "value": f"{en.get('client')}: {en.get('tool')}"})
+                vers = [v for v, ok in (en.get("versions") or {}).items() if ok is True]
+                props.append({"name": "fedlin:acceptedProtocolVersions", "value": ",".join(vers) or "none"})
+                silent = [v for v, ok in (en.get("versions") or {}).items() if ok is None]
+                if silent:
+                    props.append({"name": "fedlin:untestedProtocolVersions", "value": ",".join(silent)})
+                for v, suites in sorted((en.get("suites") or {}).items()):
+                    props.append({"name": f"fedlin:acceptedCipherSuites:{v}", "value": ",".join(suites)})
+                g_ok = [g for g, ok in (en.get("groups") or {}).items() if ok is True]
+                g_no = [g for g, ok in (en.get("groups") or {}).items() if ok is False]
+                g_na = [g for g, ok in (en.get("groups") or {}).items() if ok is None]
+                if g_na:
+                    props.append({"name": "fedlin:untestedGroups", "value": ",".join(g_na)})
+                props.append({"name": "fedlin:acceptedGroups", "value": ",".join(g_ok) or "none"})
+                props.append({"name": "fedlin:refusedGroups", "value": ",".join(g_no) or "none"})
+                if en.get("dh_bits"):
+                    props.append({"name": "fedlin:dhGroupBits", "value": ",".join(str(b) for b in en["dh_bits"])})
+                if en.get("truncated"):
+                    props.append({"name": "fedlin:enumerationTruncated", "value": ",".join(en["truncated"])})
+                if en.get("incomplete"):
+                    # the suite loop stopped without a server refusal (timeout, reset, rate limit): list is partial
+                    props.append({"name": "fedlin:enumerationIncomplete", "value": ",".join(en["incomplete"])})
+            elif en.get("reason"):
+                props.append({"name": "fedlin:enumerationNote", "value": en["reason"]})
         co = classical_only or {}
         if co.get("outcome"):
             # Second handshake from a client offering only classical key exchange (fact, not a verdict).
@@ -859,7 +1196,7 @@ def detect_library_crypto(doc):
     """Infer crypto capability from known crypto/PQC library dependencies (cdxgen SBOM).
 
     Emits deduped algorithm crypto-assets (tagged as dependency-capability) so the overlay
-    classifies them — surfacing BOTH compliant (PQC/AES-256/SHA) and non-compliant (RSA/ECDSA)
+    classifies them: surfacing BOTH compliant (PQC/AES-256/SHA) and non-compliant (RSA/ECDSA)
     crypto that source-API detection misses. Presence != confirmed usage: flagged capability,
     analyst-verifies actual use.
     """
@@ -932,7 +1269,7 @@ def overlay_untagged(doc, regime=None):
 
 def fallback_cert_scan(theia_dir, doc, openssl_bin="openssl"):
     """Supplement cbomkit-theia, which silently DROPS certificates whose public-key
-    OID it can't parse (EdDSA/RFC 8410; ML-DSA/SLH-DSA/2024 OIDs — confirmed in lab
+    OID it can't parse (EdDSA/RFC 8410; ML-DSA/SLH-DSA/2024 OIDs: confirmed in lab
     testing). Parse those with OpenSSL 3.5 (which recognizes them) and add algorithm
     crypto-assets so the overlay classifies them. RSA/EC/DSA are already captured by
     theia and skipped here (no double-count)."""
@@ -1130,7 +1467,7 @@ def main():
     ap.add_argument("--regime", default="",
                     help="annotate assets with a regime crosswalk: FISMA|CMMC|HIPAA|PCI-DSS|GLBA|NERC-CIP")
     ap.add_argument("--deep", action="store_true",
-                    help="run intrusive checks (FIPS via oc/kubectl debug node — spins a short-lived pod)")
+                    help="run intrusive checks (FIPS via oc/kubectl debug node: spins a short-lived pod)")
     ap.add_argument("--debug-image", default="",
                     help="image for --deep on non-OpenShift clusters (kubectl debug node); pin by digest")
     ap.add_argument("--kube-cli", default="oc",
@@ -1145,9 +1482,15 @@ def main():
                          "CBOMkit source scan produced out-of-band by scripts/run-cbomkit.sh (source coverage)")
     ap.add_argument("--exclude", action="append", default=[],
                     help="drop assets whose evidence location matches this glob/substring (repeatable), e.g. "
-                         "--exclude docs/ --exclude scratch/ --exclude '*.backup' — cuts false-positive noise")
+                         "--exclude docs/ --exclude scratch/ --exclude '*.backup': cuts false-positive noise")
     ap.add_argument("--no-dep-crypto", action="store_true",
                     help="disable inferring crypto capability from known library dependencies (cdxgen SBOM)")
+    ap.add_argument("--no-enumerate", action="store_true",
+                    help="skip enumerating what each TLS endpoint accepts (protocol versions, cipher suites, "
+                         "key-exchange groups, certificate types); enumeration takes about 10-15 s per endpoint")
+    ap.add_argument("--enumerate-pace", type=float, default=0.0, metavar="SECONDS",
+                    help="pause between enumeration handshakes to one endpoint, for servers that rate-limit "
+                         "(each handshake that times out is recorded as not tested, never as refused)")
     ap.add_argument("--no-classical-probe", action="store_true",
                     help="skip the second, classical-only handshake per TLS endpoint (PQCMM 4.3.1 evidence); "
                          "it adds about one handshake (2-3 s on a FIPS host using the probe container) per endpoint")
@@ -1157,7 +1500,7 @@ def main():
                          "Works with --no-runtime (endpoint-only, the thin-footprint on-ramp) or augments cluster "
                          "routes in a cluster run. Reads public certificate metadata only.")
     ap.add_argument("--no-runtime", action="store_true",
-                    help="skip the OCP cluster capture (oc) — build the CBOM from "
+                    help="skip the OCP cluster capture (oc): build the CBOM from "
                          "--endpoints/--repo/--theia-dir only")
     ap.add_argument("--self-serve", action="store_true",
                     help="Unattended automated-scan mode: implies --no-runtime + --report; emits a GATED report "
@@ -1177,13 +1520,32 @@ def main():
         if action.dest in KIT_FLAGS and not KIT_FLAGS[action.dest]:
             action.help = argparse.SUPPRESS
     args = ap.parse_args()
-    global CLASSICAL_PROBE
+    global CLASSICAL_PROBE, ENUMERATE
     CLASSICAL_PROBE = not args.no_classical_probe
+    ENUMERATE = not args.no_enumerate
+    global ENUM_PACE
+    ENUM_PACE = max(0.0, min(args.enumerate_pace, 10.0))
     for dest, avail in KIT_FLAGS.items():
         val, default = getattr(args, dest, None), ap.get_default(dest)
         if not avail and val not in (None, False, "", [], default):
             ap.error(f"--{dest.replace('_', '-')} is part of the FEDLIN engagement kit and is not in this build")
     cnsa.DEFAULT_PROFILE = args.profile  # every classify() call in this run uses the chosen profile
+
+    # Invalid input stops the run with exit code 2 (STABILITY.md) instead of producing an empty CBOM that a CI
+    # gate would read as a pass.
+    bad = []
+    if args.endpoints and not parse_endpoints(args.endpoints):
+        bad.append("--endpoints: no valid hostname or IP in the values given")
+    for x in args.merge_cbom:
+        if not os.path.isfile(x):
+            bad.append(f"--merge-cbom {x}: not a file")
+    for flag, x in (("--repo", args.repo), ("--theia-dir", args.theia_dir)):
+        if x and not os.path.isdir(x):
+            bad.append(f"{flag} {x}: not a directory")
+    if bad:
+        for b in bad:
+            sys.stderr.write(f"[error] {b}\n")
+        sys.exit(2)
 
     # Self-serve: deterministic, source-based, gated output.
     if args.self_serve:
@@ -1199,7 +1561,7 @@ def main():
     cyclonedx_bin = args.cyclonedx or os.path.join(here, "..", "bin", "cyclonedx")
     theia_bin = args.theia or os.path.join(here, "..", "bin", "cbomkit-theia")
 
-    # --- runtime capture (cluster) — skipped for --no-runtime / --self-serve (source-based) ---
+    # --- runtime capture (cluster): skipped for --no-runtime / --self-serve (source-based) ---
     if args.no_runtime:
         ssh = None
         counts = {"tls_secrets": 0, "sealed_secrets": 0}
@@ -1208,11 +1570,11 @@ def main():
         if hosts:
             mode = "self-serve" if args.self_serve else "endpoint-scan"
             ctx = {"mode": mode,
-                   "capture": f"live TLS endpoint scan — {len(certs)}/{len(hosts)} endpoint(s) reachable",
+                   "capture": f"live TLS endpoint scan, {len(certs)}/{len(hosts)} endpoint(s) reachable",
                    "endpoints_supplied": len(hosts)}
         else:
             ctx = {"mode": "self-serve" if args.self_serve else "no-runtime",
-                   "capture": "source/dir only — no runtime endpoint capture"}
+                   "capture": "source/dir only: no runtime endpoint capture"}
         # record the FIPS posture the scan itself ran under (scan host / in-boundary container)
         ctx["fips"] = read_local_fips()
     else:
@@ -1223,12 +1585,12 @@ def main():
         platform = detect_platform(kube)
         if platform == "unreachable":
             sys.stderr.write(
-                f"[warn] cluster unreachable or RBAC-limited: `{kube} api-resources` returned nothing — wrong "
+                f"[warn] cluster unreachable or RBAC-limited: `{kube} api-resources` returned nothing: wrong "
                 "context, cluster down, or the token cannot list resources. The runtime tier captured NO "
                 "route/ingress/edge TLS or cluster context. Fix KUBECONFIG/RBAC, or use --endpoints for edge "
                 "TLS (and --repo/--theia-dir for code/image crypto).\n")
             ctx = {"mode": "runtime (cluster unreachable)",
-                   "capture": f"{kube} api-resources returned nothing — no cluster capture",
+                   "capture": f"{kube} api-resources returned nothing: no cluster capture",
                    "ocp_version": "unknown"}
             certs = []
         elif platform == "openshift":
@@ -1237,13 +1599,13 @@ def main():
             if ctx.get("ocp_version", "unknown") == "unknown":
                 sys.stderr.write(
                     "[warn] OpenShift route/version APIs returned nothing despite the route API being served "
-                    "— RBAC-limited or a partial outage. Route/edge TLS and cluster context may be incomplete. "
+                    "RBAC-limited or a partial outage. Route/edge TLS and cluster context may be incomplete. "
                     "Use --endpoints for edge TLS.\n")
         else:
             sys.stderr.write(
                 f"[info] non-OpenShift kubernetes detected ({kube}); capturing Ingress TLS instead of "
                 "Routes. OpenShift-only context (etcd encryption, ingresscontroller TLS profile) is "
-                "unavailable — supplement with --endpoints for edge TLS.\n")
+                "unavailable: supplement with --endpoints for edge TLS.\n")
             ctx = capture_context_generic(kube)
             certs = capture_ingress(kube)
         hosts = parse_endpoints(args.endpoints)
@@ -1262,12 +1624,16 @@ def main():
         ctx["regime"] = args.regime
     ctx["profile"] = args.profile
 
+    if NOT_CAPTURED:
+        ctx["not_captured"] = "; ".join(sorted(NOT_CAPTURED))
     b = CBOM(args.name, ctx.get("ocp_version", "unknown"), ctx, regime=args.regime or None)
     b.subject_tag = args.subject_tag or default_subject_tag(args.name)
     for c in certs:
         b.add_certificate(c)
         b.add_tls_kex(c["host"], c.get("kex_group"), c.get("tls_protocol"), c.get("tls_cipher"),
-                      c.get("kex_partial"), c.get("classical_only"))
+                      c.get("kex_partial"), c.get("classical_only"), c.get("enumeration"))
+        for x in _extra_certificates(c):
+            b.add_certificate(x, extra=x["requested"])
     if certs:
         vias = [c.get("kex_probe_via") for c in certs]
         img = os.environ.get("FEDLIN_KEX_PROBE_IMAGE", "") or _default_probe_image()
@@ -1278,6 +1644,10 @@ def main():
             parts.append(f"bundled probe OpenSSL {os.environ.get('FEDLIN_KEX_PROBE_OPENSSL', '')}, full offer")
         if "container" in vias:
             parts.append(f"container {img}, full offer")
+        if any((v or "").startswith("enumeration client") for v in vias):
+            parts.append("enumeration client, for endpoints the host OpenSSL could not connect to")
+        if any((v or "").startswith("classical-probe") for v in vias):
+            parts.append("classical-only handshake, for endpoints that refused every ML-KEM group in enumeration")
         if "host-fips-subset" in vias:
             parts.append("FIPS host, reduced offer (no X25519MLKEM768); classical results not recorded; "
                          "build images/kex-probe or set FEDLIN_KEX_PROBE_IMAGE")
@@ -1288,7 +1658,18 @@ def main():
         b.add_sealed_secrets(counts["sealed_secrets"])
     doc = b.to_dict()
 
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    out_dir = os.path.dirname(args.out) or "."
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as e:
+        sys.stderr.write(f"[error] cannot create the output folder {out_dir!r}: {e.strerror}\n")
+        sys.exit(2)
+    if not os.access(out_dir, os.W_OK):
+        sys.stderr.write(
+            f"[error] the output folder {out_dir!r} is not writable by this user (uid {os.getuid()}). In a container, "
+            "run as your own user: podman run --userns=keep-id --user \"$(id -u):$(id -g)\" ...  or  "
+            "docker run --user \"$(id -u):$(id -g)\" ...\n")
+        sys.exit(2)
     runtime_tmp = args.out + ".runtime.json"
     with open(runtime_tmp, "w") as f:
         json.dump(doc, f, indent=2)
@@ -1362,7 +1743,7 @@ def main():
         n_dep = detect_library_crypto(final)
         if n_dep:
             print(f"[ok] dependency-graph crypto detection: {n_dep} algorithm(s) inferred from known libraries "
-                  f"(capability — SBOM presence, not confirmed usage)")
+                  f"(capability: SBOM presence, not confirmed usage)")
     if args.theia_dir:
         n_fb = fallback_cert_scan(args.theia_dir, final)
         if n_fb:
@@ -1402,7 +1783,7 @@ def main():
     result = policymod.evaluate(args.out, profile=args.profile, regime=args.regime or None)
     with open(pol_path, "w") as f:
         json.dump(result, f, indent=2)
-    print(f"[ok] policy result: {pol_path} — {result['policy']['policyId']} {result['policy']['version']}, "
+    print(f"[ok] policy result: {pol_path}: {result['policy']['policyId']} {result['policy']['version']}, "
           f"{result['summary']}")
     with open(args.out) as f:
         view = policymod.apply(json.load(f), result, args.out)
@@ -1414,7 +1795,7 @@ def main():
     if args.report:
         summ = out_base + ".summary.json"
         try:
-            # Always render UNSIGNED first — the "signed" claim is added only after signing
+            # Always render UNSIGNED first: the "signed" claim is added only after signing
             # actually succeeds (see the --sign block). Fail-closed by construction: nothing on
             # disk ever claims an attestation that does not exist.
             md, summary = reportmod.build_report(view, self_serve=args.self_serve, brand=args.brand,
@@ -1423,7 +1804,7 @@ def main():
                 f.write(md + "\n")
             with open(summ, "w") as f:
                 json.dump(summary, f, indent=2)
-            print(f"[ok] report: {rpt} — score {summary['readiness_score']} ({summary['grade']}), "
+            print(f"[ok] report: {rpt}: score {summary['readiness_score']} ({summary['grade']}), "
                   f"algorithms (all lanes): {summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
         except Exception as e:
             sys.stderr.write(f"[warn] report generation failed: {e}\n")
@@ -1440,7 +1821,7 @@ def main():
                 f.write(md + "\n")
             with open(dsumm, "w") as f:
                 json.dump(summary, f, indent=2)
-            print(f"[ok] delta: {dpath} — score {summary['score_baseline']} -> "
+            print(f"[ok] delta: {dpath}: score {summary['score_baseline']} -> "
                   f"{summary['score_current']}, {summary['new_vulnerable']} new, "
                   f"{summary['regressions']} regressions")
         except Exception as e:
@@ -1475,14 +1856,14 @@ def main():
         try:
             # Upgrade the report to CLAIM the attestation, THEN sign so the signature covers that exact
             # text. Order matters: the on-disk report was written UNSIGNED above, so any failure here
-            # leaves (or is restored to) an unsigned report — never a false claim.
+            # leaves (or is restored to) an unsigned report: never a false claim.
             if args.report and os.path.exists(rpt):
                 _rewrite_report(signed=True)
             att = signmod.sign_artifacts(_artifacts(), att_path, signed_at=cbom_ts,
                                          key_file=args.slh_key or None,
                                          variant=args.slh_variant or None,
                                          node_bin=args.node)
-            print(f"[ok] attestation: {att_path} — {att['algorithm']}, keyId {att['publicKeyId']}, "
+            print(f"[ok] attestation: {att_path}: {att['algorithm']}, keyId {att['publicKeyId']}, "
                   f"{len(att['artifacts'])} artifact(s) signed (verify: python3 sign.py verify {att_name})")
         except Exception as e:
             sys.stderr.write(f"[error] signing failed: {e}\n"
@@ -1498,7 +1879,7 @@ def main():
                         os.remove(rpt)
                     except OSError:
                         pass
-                    sys.stderr.write("  could not restore an unsigned report — removed it to avoid a false claim.\n")
+                    sys.stderr.write("  could not restore an unsigned report: removed it to avoid a false claim.\n")
             if os.path.exists(att_path):  # drop any partial/failed attestation
                 try:
                     os.remove(att_path)

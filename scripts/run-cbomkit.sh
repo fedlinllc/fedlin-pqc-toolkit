@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# run-cbomkit.sh — drive an out-of-band CBOMkit source scan and pull the CycloneDX CBOM.
+# run-cbomkit.sh: drive an out-of-band CBOMkit source scan and pull the CycloneDX CBOM.
 #
-# WHY OUT-OF-BAND: CBOMkit (github.com/PQCA/cbomkit) is a compose SERVICE — Quarkus/Java
+# WHY OUT-OF-BAND: CBOMkit (github.com/PQCA/cbomkit) is a compose SERVICE: Quarkus/Java
 # backend + Vue frontend + PostgreSQL, ports 8001/8081, scanner = sonar-cryptography
 # (Java/Python/Go source). Baking that stack into fedlin-pqc-toolkit would break the
 # toolkit's single-container / air-gap properties. Instead we run CBOMkit
@@ -21,7 +21,7 @@
 #     --out out/scan.json --name "<app>" --validate
 #
 # NOTE: authored against the documented CBOMkit REST API (POST /api/v1/scan;
-#   GET /api/v1/cbom/last/{n}). Verify against your CBOMkit version — response
+#   GET /api/v1/cbom/last/{n}). Verify against your CBOMkit version: response
 #   envelope field names can differ between releases (handled defensively below).
 set -euo pipefail
 
@@ -36,7 +36,7 @@ command -v jq >/dev/null || { echo "[error] jq required" >&2; exit 3; }
 
 echo "[*] CBOMkit API: $API" >&2
 if ! curl -fsS "$API/api" >/dev/null 2>&1; then
-  echo "[error] CBOMkit not reachable at $API/api — start it with 'make production' first." >&2
+  echo "[error] CBOMkit not reachable at $API/api: start it with 'make production' first." >&2
   exit 4
 fi
 
@@ -83,6 +83,6 @@ if [ ! -s "$OUT" ] || ! jq -e '.specVersion' "$OUT" >/dev/null 2>&1; then
 fi
 
 n="$(jq '[.components[]? | select(.type=="cryptographic-asset")] | length' "$OUT")"
-echo "[ok] wrote $OUT — $n cryptographic-asset component(s)" >&2
+echo "[ok] wrote $OUT: $n cryptographic-asset component(s)" >&2
 echo "[next] python3 scripts/tier2_pipeline.py --merge-cbom $OUT \\" >&2
 echo "         --out out/scan.json --name \"<app>\" --validate" >&2

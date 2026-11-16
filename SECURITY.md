@@ -1,5 +1,10 @@
 # Security policy
 
+## Supported versions
+
+Security fixes go into the latest 1.x minor release. Older 0.x and 1.x releases are not patched; upgrade
+to the latest release.
+
 ## Reporting a vulnerability
 
 Please report security issues privately through GitHub's **Report a vulnerability** (Security
@@ -22,3 +27,8 @@ regular issue and cite the primary source. Confirmed changes are logged in `CORR
   Secret-hygiene findings report locations, never values.
 - Hostnames passed to `--endpoints` are validated and shell-quoted before use.
 - Tool downloads are pinned and checksum-verified (`toolkit.lock`); the README lists the exceptions.
+- The local MCP server never scans or connects to the network, reads only `.json` files under the folder
+  it is started with, writes nothing, and marks file-derived text as untrusted.
+- A policy result is used only when its verdicts re-check against this toolkit's ruleset
+  (`policy.py verify`); otherwise the CBOM is evaluated again.
+- Releases carry Sigstore-signed SLSA build provenance; see "Verify a release" in the README.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-merge-hw-cbom.py — FEDLIN PQC Toolkit
+merge-hw-cbom.py: FEDLIN PQC Toolkit
 
 Merges hardware component JSON (output of collect-hardware-linux.py or
 collect-hardware-windows.ps1) into an existing CycloneDX 1.6 CBOM.
@@ -46,7 +46,7 @@ def extract_components(data, source_path):
         return data
     if isinstance(data, dict) and "components" in data:
         return data["components"]
-    print(f"warning: {source_path} has no 'components' key and is not an array — skipped",
+    print(f"warning: {source_path} has no 'components' key and is not an array: skipped",
           file=sys.stderr)
     return []
 

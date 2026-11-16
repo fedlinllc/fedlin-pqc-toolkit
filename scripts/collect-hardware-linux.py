@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-collect-hardware-linux.py — FEDLIN PQC Toolkit hardware posture collector (Linux)
+collect-hardware-linux.py: FEDLIN PQC Toolkit hardware posture collector (Linux)
 
 Emits a CycloneDX 1.6 component fragment for OS version, TPM presence, and HSM
 presence. Pair the output with merge-hw-cbom.py to insert the components into your
 CBOM before running the report stage.
 
-Run on each Linux host in scope — directly or via SSH:
+Run on each Linux host in scope: directly or via SSH:
     python3 collect-hardware-linux.py --host fileserver.example.gov --pretty
     ssh root@host python3 < collect-hardware-linux.py -- --host host.example.gov
 
@@ -14,7 +14,7 @@ READS NO SECRETS, BY CONSTRUCTION: reads /etc/os-release, /sys/class/tpm/ sysfs 
 TPM metadata), process names (ps -e comm), and OpenSSL version strings. Never reads
 private keys, certificate material, PKCS#11 session state, or TPM key hierarchies.
 
-Network appliances (firewalls, load balancers) are NOT collected here — their PQC
+Network appliances (firewalls, load balancers) are NOT collected here: their PQC
 posture is determined by the TLS kex probe in tier2_pipeline.py plus vendor firmware
 timelines. Add them manually as hw/net/* components using the sample-agency-cbom.json
 schema as a reference.
@@ -93,7 +93,7 @@ def detect_os(hostname):
         has_ossl35 = (ossl_major > 3) or (ossl_major == 3 and ossl_minor >= 5)
 
         if has_ossl35:
-            # OpenSSL 3.5 is present — ML-KEM is compiled in but not exposed by the active provider.
+            # OpenSSL 3.5 is present: ML-KEM is compiled in but not exposed by the active provider.
             # Most common cause: FIPS mode with a FIPS provider whose certificate does not approve ML-KEM.
             detail = (
                 f"OpenSSL 3.5+ is installed ({openssl_ver}) but ML-KEM is not available in "
@@ -110,14 +110,14 @@ def detect_os(hostname):
                 "'openssl list -kem-algorithms'. Validation status: see the report's FIPS 140-3 (CMVP) section."
             )
 
-    # Check whether AD CS-equivalent (Dogtag, EJBCA) is installed — if so, the OS is a PKI gate
+    # Check whether AD CS-equivalent (Dogtag, EJBCA) is installed: if so, the OS is a PKI gate
     pki_service = ""
     for proc_name in ("dogtagd", "pki-tomcat", "ejbca"):
         if proc_name in _run("ps", "-e", "-o", "comm="):
             pki_service = proc_name
             break
     if pki_service:
-        detail += f" PKI service detected ({pki_service}) — this host is a PKI gate for certificate migration."
+        detail += f" PKI service detected ({pki_service}): this host is a PKI gate for certificate migration."
 
     props = [
         {"name": "fedlin:hw_class",       "value": "os"},
@@ -146,7 +146,7 @@ def detect_os(hostname):
     return {
         "type":     "operating-system",
         "bom-ref":  f"hw/os/{slug}",
-        "name":     f"{os_name} — {hostname}",
+        "name":     f"{os_name}: {hostname}",
         "version":  os_version,
         "properties": props,
     }
@@ -197,7 +197,7 @@ def detect_tpm(hostname):
         {"name": "fedlin:hw_action_detail", "value": (
             "Existing discrete TPM cannot perform ML-KEM or ML-DSA as general operations. "
             "No firmware path for PQC general ops exists for current-gen discrete TPMs. "
-            "Replace at next scheduled hardware refresh (2028–2030 lifecycle)."
+            "Replace at next scheduled hardware refresh (2028 to 2030 lifecycle)."
         )},
         {"name": "fedlin:hw_fips_status", "value": (
             "not determined by this collector: check the TPM model's CMVP certificate, if any"
@@ -210,7 +210,7 @@ def detect_tpm(hostname):
     return {
         "type":    "device",
         "bom-ref": f"hw/tpm/{slug}",
-        "name":    f"{display_version} — {hostname}",
+        "name":    f"{display_version}: {hostname}",
         "version": f"{version_str}.0" if version_str.isdigit() else version_str,
         "properties": props,
     }
@@ -251,7 +251,7 @@ _PKCS11_LIBS = [
 def detect_hsm(hostname):
     found_name = ""
 
-    # 1. Check running process names (comm field only — no args, no secrets)
+    # 1. Check running process names (comm field only: no args, no secrets)
     running = _run("ps", "-e", "-o", "comm=")
     for proc, name in _HSM_PROCS.items():
         if proc in running:
@@ -278,7 +278,7 @@ def detect_hsm(hostname):
         return {
             "type":    "device",
             "bom-ref": f"hw/hsm/{slug}",
-            "name":    f"HSM — {hostname} ({found_name})",
+            "name":    f"HSM: {hostname} ({found_name})",
             "properties": [
                 {"name": "fedlin:hw_class",        "value": "hsm"},
                 {"name": "fedlin:host",             "value": hostname},
@@ -289,14 +289,14 @@ def detect_hsm(hostname):
                     "its CMVP certificate approves ML-KEM / ML-DSA, before marking it PQC-capable. "
                     "Validation status: see the report's FIPS 140-3 (CMVP) section."
                 )},
-                {"name": "fedlin:hw_fips_status", "value": "analyst verification required — see action detail"},
+                {"name": "fedlin:hw_fips_status", "value": "analyst verification required: see action detail"},
             ],
         }
     else:
         return {
             "type":    "device",
             "bom-ref": f"hw/hsm/absent-{slug}",
-            "name":    f"HSM — not detected on {hostname}",
+            "name":    f"HSM: not detected on {hostname}",
             "properties": [
                 {"name": "fedlin:hw_class",        "value": "hsm"},
                 {"name": "fedlin:host",             "value": hostname},
@@ -308,7 +308,7 @@ def detect_hsm(hostname):
                     "Validation status: see the report's FIPS 140-3 (CMVP) section."
                 )},
                 {"name": "fedlin:hw_pqc_gate",   "value": "true"},
-                {"name": "fedlin:hw_fips_status", "value": "n/a — no HSM detected"},
+                {"name": "fedlin:hw_fips_status", "value": "n/a: no HSM detected"},
             ],
         }
 

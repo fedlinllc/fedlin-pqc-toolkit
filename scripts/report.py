@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""FEDLIN PQC Toolkit — report stage (v0.1).
+"""FEDLIN PQC Toolkit: report stage (v0.1).
 
 Turns a validated CycloneDX 1.6 CBOM (as produced by tier2_pipeline.py) into the
 two artifacts a buyer actually reads and funds:
 
-  1. an EXECUTIVE SCORECARD — a PQC-readiness score, exposure counts, top risks,
+  1. an EXECUTIVE SCORECARD: a PQC-readiness score, exposure counts, top risks,
      and mandate alignment (EO 14412 / OMB M-26-15 / NIST IR 8547 / CNSA 2.0);
-  2. a PRIORITIZED MIGRATION ROADMAP — vulnerable assets sequenced into waves
+  2. a PRIORITIZED MIGRATION ROADMAP: vulnerable assets sequenced into waves
      anchored to the NIST IR 8547 timeline (RSA/ECC deprecated 2030, disallowed
      2035), each with its migration target (civilian or nss profile) and 800-53 controls.
 
 Deterministic (Mode C): reads only what the overlay already stamped onto the CBOM
 (`cnsa2:*` verdicts, `crosswalk:<regime>` refs). No AI, no network at classification time, no re-eval.
-The CBOM is the single source of truth — this stage never re-classifies.
+The CBOM is the single source of truth: this stage never re-classifies.
 
 Usage:  python3 report.py --cbom out/cbom.json --out out/cbom.report.md [--json out/cbom.summary.json]
 """
@@ -33,6 +33,8 @@ try:
 except ImportError:
     _whitelabel = None
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling modules, also under python -I
+import cnsa20_ruleset as cnsa  # HNDL: classify negotiated key exchange
 import cmvp as _cmvp  # FIPS 140-3 (CMVP) candidates from the dated snapshot in data/cmvp/
 
 PRIORITY_ORDER = {"Critical": 0, "High": 1, "Low": 2, "None": 3, "Review": 4}
@@ -45,6 +47,13 @@ def load(path):
 
 def props(comp):
     return {p["name"]: p["value"] for p in comp.get("properties", [])}
+
+
+def _coverage(bom):
+    """The coverage the CBOM declares for its subject (PKI Consortium profile), 'partial' if it declares none."""
+    comp = (bom.get("metadata", {}) or {}).get("component", {}) or {}
+    return next((p.get("value") for p in comp.get("properties", []) or []
+                 if p.get("name") == "pkic:profile:coverage"), None) or "partial"
 
 
 def meta_props(bom):
@@ -180,7 +189,7 @@ SECRET_HYGIENE_TYPES = {"token", "password", "credential"}
 def is_secret_hygiene(comp):
     """A gitleaks-style secret detection (API key / token) surfaced by cbomkit-theia.
 
-    These are leaked credentials, NOT quantum-vulnerable cryptography — they carry no
+    These are leaked credentials, NOT quantum-vulnerable cryptography: they carry no
     algorithm and must not pollute the PQC crypto-asset count or the readiness score.
     Distinguisher: related-crypto-material with NO algorithmRef and a token/credential
     type (or a 'key' type whose name is an API-key rule). Legitimate key material (e.g.
@@ -202,7 +211,7 @@ def is_secret_hygiene(comp):
 
 
 def secret_hygiene_items(bom):
-    """gitleaks secret detections, with locations (never values) — for the incidental section."""
+    """gitleaks secret detections, with locations (never values): for the incidental section."""
     out = []
     for c in bom.get("components", []):
         if c.get("type") == "cryptographic-asset" and is_secret_hygiene(c):
@@ -217,7 +226,7 @@ def secret_hygiene_items(bom):
 
 
 def other_assets(bom):
-    """Non-algorithm crypto assets (certs, protocols, key material) — for the inventory line.
+    """Non-algorithm crypto assets (certs, protocols, key material): for the inventory line.
     Excludes gitleaks secret-hygiene detections, which are reported separately (not PQC)."""
     counts = {}
     hndl = []
@@ -233,6 +242,11 @@ def other_assets(bom):
         p = props(c)
         if "fedlin:hndl_exposure" in p:
             hndl.append((c.get("name", "asset"), p["fedlin:hndl_exposure"], p.get("cnsa2:priority", "High")))
+        # A TLS session negotiated with quantum-vulnerable key exchange can be recorded now and decrypted later.
+        kex = [x.get("value") for x in c.get("properties", []) if x.get("name") == "pkic:profile:keyExchange"]
+        if at == "protocol" and kex and any(cnsa.classify(k).get("quantum_vulnerable") is True for k in kex):
+            hndl.append((c.get("name", "TLS session"), "key exchange " + ", ".join(kex) + " is quantum-vulnerable; "
+                         "recorded sessions can be decrypted later", "High"))
     return counts, hndl
 
 
@@ -271,7 +285,7 @@ def certificates(bom):
 
 # CA/Browser Forum maximum TLS certificate lifetime step-down (398 -> 47 days by 2029).
 # A cert whose validity window already exceeds an upcoming cap cannot be renewed like-for-like
-# under that cap — i.e. it forces shorter-lived certs and thus renewal automation.
+# under that cap: i.e. it forces shorter-lived certs and thus renewal automation.
 CERT_LIFETIME_CAPS = [
     ("2026-03-15", 200, "CA/B Forum 200-day cap (first step-down)"),
     ("2027-03-15", 100, "CA/B Forum 100-day cap"),
@@ -283,7 +297,7 @@ def cert_posture(bom):
     """Renewal-exposure view of the certificate estate, deterministic against the CBOM timestamp.
 
     Surfaces the CA/Browser-Forum 47-day cert-cliff (certs expiring soon, and the shrinking
-    max-lifetime caps that make manual renewal untenable) — the crypto-agility discipline PCI
+    max-lifetime caps that make manual renewal untenable): the crypto-agility discipline PCI
     DSS 4.0 §12.3.3 and the cert-lifetime step-down turn into recurring work.
     """
     now = _parse_ts(bom.get("metadata", {}).get("timestamp", ""))
@@ -373,6 +387,34 @@ def hardware_components(bom):
     return out
 
 
+def server_configuration(bom):
+    """Per TLS endpoint: what it accepts (enumeration facts) with the policy stage's verdicts (cnsa2:config)."""
+    rows = []
+    for c in bom.get("components", []):
+        p = props(c)
+        if not p.get("fedlin:enumeration"):
+            continue
+        server = (p.get("pkic:profile:endpointRole:server") or c.get("name", "")).split(":", 1)[-1]
+        try:
+            items = json.loads(p.get("cnsa2:config") or "[]")
+        except ValueError:
+            items = []
+        groups = [g for g in (p.get("fedlin:acceptedGroups") or "").split(",") if g and g != "none"]
+        rows.append({"server": server, "status": p["fedlin:enumeration"],
+                     "versions": [v for v in (p.get("fedlin:acceptedProtocolVersions") or "").split(",") if v and v != "none"],
+                     "mlkem": [g for g in groups if "mlkem" in g.lower()],
+                     "refused_mlkem": [g for g in (p.get("fedlin:refusedGroups") or "").split(",") if "mlkem" in g.lower()],
+                     "broken": [i["item"] for i in items if i["status"] == "broken"],
+                     "vulnerable": [i["item"] for i in items if i["status"] == "vulnerable"],
+                     "static_rsa": list(dict.fromkeys(i["item"].split(" ", 4)[-1] for i in items
+                                                      if (i.get("target") or "").startswith("Disable static-RSA suites"))),
+                     "unanswered": [v for v in (p.get("fedlin:untestedProtocolVersions") or "").split(",") if v],
+                     "items": items, "note": p.get("fedlin:enumerationNote", ""), "tool": p.get("fedlin:enumerationTool", ""),
+                     "truncated": p.get("fedlin:enumerationTruncated", ""),
+                     "incomplete": p.get("fedlin:enumerationIncomplete", "")})
+    return rows
+
+
 def classical_fallback(bom):
     """TLS interfaces probed with a classical-only client: [(server, outcome, negotiated)]. Facts from the CBOM."""
     rows = []
@@ -392,14 +434,14 @@ def grade(score):
     if score is None:
         return "N/A", "no scored public-key usages found"
     if score >= 90:
-        return "A — PQC-ready", "the estate is largely on quantum-resistant cryptography"
+        return "A: PQC-ready", "the estate is largely on quantum-resistant cryptography"
     if score >= 70:
-        return "B — On track", "a minority of assets remain quantum-vulnerable"
+        return "B: On track", "a minority of assets remain quantum-vulnerable"
     if score >= 40:
-        return "C — Partial", "roughly half the scored public-key usages are quantum-vulnerable"
+        return "C: Partial", "roughly half the scored public-key usages are quantum-vulnerable"
     if score >= 15:
-        return "D — At risk", "most scored public-key usages are quantum-vulnerable"
-    return "F — Not started", "the estate is almost entirely quantum-vulnerable"
+        return "D: At risk", "most scored public-key usages are quantum-vulnerable"
+    return "F: Not started", "the estate is almost entirely quantum-vulnerable"
 
 
 def _findings_table(vuln, review, resistant, cap, profile):
@@ -419,16 +461,16 @@ def _findings_table(vuln, review, resistant, cap, profile):
         if a["name"] in seen:
             continue
         seen.add(a["name"])
-        conf = ("Low — dependency capability, verify usage" if a.get("capability")
-                else "Low — needs analyst" if a["priority"] == "Review"
-                else "High — deterministic ruleset match")
-        L.append(f"| {_mark(a)} | {a['target']} | {', '.join(a['controls']) or '—'} | {conf} |")
+        conf = ("Low: dependency capability, verify usage" if a.get("capability")
+                else "Low: needs analyst" if a["priority"] == "Review"
+                else "High: deterministic ruleset match")
+        L.append(f"| {_mark(a)} | {a['target']} | {', '.join(a['controls']) or '-'} | {conf} |")
     if not vuln:
-        L.append("| — | no quantum-vulnerable algorithms detected in static reach | — | — |")
+        L.append("| - | no quantum-vulnerable algorithms detected in static reach | - |: |")
     L.append("")
     if review:
         L.append(f"**{len(review)} algorithm(s) could not be classified** and are flagged **Low confidence "
-                 f"— needs analyst**: {', '.join(sorted({a['name'] for a in review}))}.")
+                 f"needs analyst**: {', '.join(sorted({a['name'] for a in review}))}.")
         L.append("")
     L.append("### Not included in this report")
     L.append("")
@@ -483,9 +525,9 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
 
     L = []
     if self_serve:
-        L.append(f"# PQC Readiness — Automated Self-Serve Scan — {sysname}")
+        L.append(f"# PQC Readiness: Automated Self-Serve Scan: {sysname}")
         L.append("")
-        L.append("> **WARNING — THIS IS AN AUTOMATED SCAN, NOT AN ASSESSMENT.** It runs a deterministic ruleset over "
+        L.append("> **WARNING: THIS IS AN AUTOMATED SCAN, NOT AN ASSESSMENT.** It runs a deterministic ruleset over "
                  "what static/source tooling can see. It does **not** replace an assessment: it carries no "
                  "engineered migration sequencing, no NSS-vs-commercial path judgment, no analyst verification, "
                  "no owner assignments, and no live runtime/endpoint capture. Treat every finding as indicative, "
@@ -493,10 +535,10 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("")
         L.append("> **Out of static reach:** source scanning cannot see runtime TLS/SSH negotiation, edge/CDN "
                  "termination, HSM/key-store material, or config-driven cipher selection. Cryptography that lives "
-                 "only at runtime will be under-counted here — a full assessment captures it.")
+                 "only at runtime will be under-counted here: a full assessment captures it.")
         L.append("")
     else:
-        L.append(f"# PQC Readiness Report — {sysname}")
+        L.append(f"# PQC Readiness Report: {sysname}")
         L.append("")
     L.append(f"*Generated by fedlin-pqc-toolkit report stage from a CycloneDX 1.6 CBOM. "
              f"CBOM timestamp: {ts or 'n/a'}.*")
@@ -509,7 +551,8 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
 
     # ---- bottom line up front (full report only; self-serve leads with its own disclaimer) ----
     if not self_serve:
-        soon = cposture["buckets"]["expired"] + cposture["buckets"]["d30"] + cposture["buckets"]["d90"]
+        expired = cposture["buckets"]["expired"]
+        soon = cposture["buckets"]["d30"] + cposture["buckets"]["d90"]
         bits = [f"**{score if score is not None else 'N/A'}"
                 f"{'/100' if score is not None else ''} ({g})** on post-quantum readiness"]
         pk_total = _w(pk(compliant)) + _w(pk(transitional)) + _w(pk(vuln))
@@ -519,6 +562,8 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
             bits.append(f"{_w(pk(transitional))} quantum-resistant but below the {profile} profile target")
         if hndl:
             bits.append(f"{len(hndl)} harvest-now-decrypt-later exposure(s) demand priority")
+        if expired:
+            bits.append(f"**{expired} certificate(s) already expired**")
         if soon:
             bits.append(f"{soon} certificate(s) expire within 90 days")
         L.append("## Bottom line")
@@ -526,16 +571,16 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append(f"**{sysname}** scores " + "; ".join(bits) + ".")
         L.append("")
         if score is None:
-            lead = ("No algorithm assets were assessed in this capture — the score is not applicable. "
+            lead = ("No algorithm assets were assessed in this capture: the score is not applicable. "
                     "Extend the scan (runtime/endpoint/source) before drawing a readiness conclusion.")
         elif score >= 70:
-            lead = "The estate is largely quantum-ready — the work is hardening and monitoring."
+            lead = "The estate is largely quantum-ready: the work is hardening and monitoring."
         else:
             lead = ("Quantum-vulnerable public-key cryptography is the dominant exposure"
                     + ("; the roadmap below sequences the migration." if _roadmap is not None else "."))
-        L.append(lead + " This CBOM is the machine-readable inventory the mandates below call for"
-                 + ("; the prioritized roadmap is the plan. " if _roadmap is not None else ". ") +
-                 ("Certificate-renewal exposure and transport crypto-agility are called out separately — "
+        L.append(lead + " This CBOM is machine-readable inventory evidence for the mandates below"
+                 + ("; the prioritized roadmap below sequences the work. " if _roadmap is not None else ". ") +
+                 ("Certificate-renewal exposure and transport crypto-agility are called out separately: "
                   "they are the recurring discipline (PCI DSS 4.0 §12.3.3 / the CA/Browser-Forum cert-lifetime "
                   "step-down) that a one-time fix does not close." if cposture["count"] else ""))
         L.append("")
@@ -544,7 +589,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     L.append("## Executive scorecard")
     L.append("")
     L.append(f"**PQC-readiness score: {score if score is not None else 'N/A'}"
-             f"{'/100' if score is not None else ''} — grade {g}.** {gnote[:1].upper() + gnote[1:]}.")
+             f"{'/100' if score is not None else ''}, grade {g}.** {gnote[:1].upper() + gnote[1:]}.")
     L.append("")
     L.append("| Measure | Value |")
     L.append("|---|---|")
@@ -581,9 +626,9 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     if regime:
         L.append(f"| Compliance dialect | {regime} (crosswalked from NIST 800-53) |")
     if secrets:
-        L.append(f"| Secret-hygiene detections | {len(secrets)} — **incidental, not PQC** (see below) |")
+        L.append(f"| Secret-hygiene detections | {len(secrets)}: **incidental, not PQC** (see below) |")
     if cap:
-        L.append(f"| Dependency-inferred (†) | {len(cap)} — capability from the SBOM, usage not confirmed |")
+        L.append(f"| Dependency-inferred (†) | {len(cap)}: capability from the SBOM, usage not confirmed |")
     L.append("")
     L.append(f"*Score = compliant quantum-resistant public-key usages ÷ (compliant + quantum-vulnerable "
              f"public-key usages), against the {profile_label}. A usage is one reference from an asset: a "
@@ -594,7 +639,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
              "detections are excluded from the crypto-asset inventory entirely. This is the toolkit's own readiness "
              "score, not a PKI Consortium PQCMM level.*")
     L.append("")
-    # scope disclosure — naming coverage boundaries prevents "inventory complete" from implying completeness
+    # scope disclosure: naming coverage boundaries prevents "inventory complete" from implying completeness
     scope_covered = mp.get("fedlin:scope_covered") or mp.get("fedlin:capture", "")
     scope_not = mp.get("fedlin:scope_not_covered", "")
     if scope_covered or scope_not:
@@ -602,7 +647,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         if scope_covered:
             parts.append(f"**Covered:** {scope_covered}.")
         if scope_not:
-            parts.append(f"**Not in scope — expand assessment to reach:** {scope_not}.")
+            parts.append(f"**Not in scope: expand assessment to reach:** {scope_not}.")
         L.append("  ".join(parts))
         L.append("")
 
@@ -610,14 +655,14 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     if tp:
         L.append("## Transport & crypto-agility posture")
         L.append("")
-        L.append("The negotiated transport configuration — the cipher inventory a vendor security "
+        L.append("The negotiated transport configuration: the cipher inventory a vendor security "
                  "questionnaire or **PCI DSS 4.0 §12.3.3** (documented, annually-reviewed inventory of "
                  "cipher suites and protocols) asks you to enumerate.")
         L.append("")
         L.append("| Measure | Value |")
         L.append("|---|---|")
         if "min_tls" in tp:
-            flag = " — **below TLS 1.2; remediate**" if tp.get("min_tls_weak") else ""
+            flag = ": **below TLS 1.2; remediate**" if tp.get("min_tls_weak") else ""
             L.append(f"| Minimum TLS version | {tp['min_tls']}{flag} |")
         if "cipher_count" in tp:
             L.append(f"| Enumerated cipher suites | {tp['cipher_count']} |")
@@ -655,18 +700,76 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("| Endpoint | Classical-only client | Negotiated |")
         L.append("|---|---|---|")
         for server, o, got in fb:
-            L.append(f"| {server} | {o} | {got or '—'} |")
+            L.append(f"| {server} | {o} | {got or '-'} |")
+        L.append("")
+
+    # ---- server configuration (enumeration) ----
+    conf = server_configuration(bom)
+    if conf:
+        L.append("## Server configuration (enumerated)")
+        L.append("")
+        L.append("Each endpoint was also tested for what it accepts, one handshake at a time: TLS 1.0 to 1.3 (SSLv3 "
+                 "is not tested), the cipher suites of each version (TLS 1.3 suites individually; for TLS 1.0 to 1.2 "
+                 "the client offers all suites and removes each one the server picks until it refuses), the "
+                 "key-exchange groups in the probe list (hybrid and pure ML-KEM, X25519, X448, NIST curves, FFDHE), "
+                 "and one certificate per signature-scheme family (RSA, ECDSA, EdDSA, ML-DSA). Accepted versions, "
+                 "suites and groups are judged by the same ruleset and listed here and as exposures; they do not "
+                 "change the score. Certificates the endpoint serves, including additional ones found here, are "
+                 "certificates in use and are scored.")
+        L.append("")
+        L.append("| Endpoint | Protocol versions accepted | ML-KEM groups accepted | Broken items accepted | "
+                 "Quantum-vulnerable items accepted |")
+        L.append("|---|---|---|---|---|")
+        for r in conf:
+            if r["status"] != "complete":
+                L.append(f"| {r['server']} | not enumerated{': ' + r['note'] if r['note'] else ''} | - | - | - |")
+                continue
+            na = f" (not tested: {', '.join(r['unanswered'])})" if r["unanswered"] else ""
+            L.append(f"| {r['server']} | {', '.join(r['versions']) or 'none'}{na} | {', '.join(r['mlkem']) or 'none'} | "
+                     f"{len(r['broken'])} | {len(r['vulnerable'])} |")
+        L.append("")
+        for r in conf:
+            if r["broken"]:
+                L.append(f"- **{r['server']}** accepts, and should stop accepting: " + "; ".join(
+                    x.replace("accepts ", "") for x in r["broken"]) + ".")
+        for r in conf:
+            if r["static_rsa"]:
+                L.append(f"- **{r['server']}** accepts {len(r['static_rsa'])} static-RSA cipher suite(s), which have no "
+                         f"forward secrecy: {', '.join(r['static_rsa'][:8])}{' ...' if len(r['static_rsa']) > 8 else ''}.")
+        refused = sorted({g for r in conf for g in r["refused_mlkem"]})
+        if refused and profile == "nss":
+            L.append(f"- Under CNSA 2.0 the key-establishment target is ML-KEM-1024. Groups refused by at least one "
+                     f"endpoint: {', '.join(refused)}.")
+        L.append("- Not tested: suites the enumeration client (OpenSSL 3.5) does not implement (3DES, RC4, export). "
+                 "A version or group listed as not tested got no answer, or could not be tested with this client; "
+                 "it is never counted as refused.")
+        inc = [f"{r['server']} ({r['incomplete']})" for r in conf if r["incomplete"]]
+        if inc:
+            L.append(f"- Suite lists are partial (the server stopped answering before refusing): {', '.join(inc)}.")
+        trunc = [r["server"] for r in conf if r["truncated"]]
+        if trunc:
+            L.append(f"- Suite enumeration stopped at its limit on: {', '.join(trunc)} (more suites may be accepted).")
         L.append("")
 
     # ---- top exposures ----
     L.append("## Top exposures")
     L.append("")
     top = sorted(vuln, key=lambda a: PRIORITY_ORDER.get(a["priority"], 9))
+    accepted_broken = sorted({(x.replace("accepts ", ""), r["server"]) for r in conf for x in r["broken"]})
+    if accepted_broken:
+        L.append("**Accepted by the server and broken or disallowed today:**")
+        L.append("")
+        by_item = {}
+        for item, server in accepted_broken:
+            by_item.setdefault(item, []).append(server)
+        for item, servers in sorted(by_item.items()):
+            L.append(f"- **{item}** (Critical): accepted by {', '.join(servers)}.")
+        L.append("")
     if hndl:
         L.append("**Harvest-now-decrypt-later (HNDL):**")
         L.append("")
         for name, note, pr in hndl:
-            L.append(f"- **{name}** ({pr}) — {note}.")
+            L.append(f"- **{name}** ({pr}): {note}.")
         L.append("")
     if top:
         L.append("**Highest-priority quantum-vulnerable algorithms:**")
@@ -676,9 +779,9 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
             if a["name"] in seen:
                 continue
             seen.add(a["name"])
-            L.append(f"- **{a['name']}** — {a['priority']}. Target: {a['target']}.")
+            L.append(f"- **{a['name']}**: {a['priority']}. Target: {a['target']}.")
         L.append("")
-    if not top and not hndl:
+    if not top and not hndl and not accepted_broken:
         L.append("No quantum-vulnerable assets detected among the algorithms assessed.")
         L.append("")
 
@@ -705,7 +808,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
                         "certificate rotation into continuous, automation-dependent work rather than an annual task.")
         else:
             cab_note = (" All certificates in scope are internally issued; CA/Browser-Forum lifetime limits "
-                        "do not apply — renewal schedule is governed by internal PKI policy.")
+                        "do not apply: renewal schedule is governed by internal PKI policy.")
         L.append(f"{cposture['count']} X.509 certificate(s) in scope. Renewal exposure is measured against the "
                  f"CBOM capture time.{cab_note}")
         L.append("")
@@ -713,8 +816,8 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("|---|---|")
         L.append(f"| Already expired | {b['expired']} |")
         L.append(f"| Expiring ≤ 30 days | {b['d30']} |")
-        L.append(f"| Expiring 31–90 days | {b['d90']} |")
-        L.append(f"| Expiring 91–365 days | {b['d365']} |")
+        L.append(f"| Expiring 31 to 90 days | {b['d90']} |")
+        L.append(f"| Expiring 91 to 365 days | {b['d365']} |")
         L.append(f"| Beyond 365 days | {b['beyond']} |")
         L.append("")
         # soonest-expiring certs (deterministic order); flag those whose lifetime already exceeds a coming cap
@@ -726,8 +829,10 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
             L.append("| Certificate | Days left | Lifetime (days) | Renewal note |")
             L.append("|---|---|---|---|")
             for r in soonest:
-                if r.get("skip_cab"):
-                    note = "internal PKI — CA/B Forum lifetime limits do not apply"
+                if r["days_left"] < 0:
+                    note = f"**expired {-r['days_left']} days ago**: replace now"
+                elif r.get("skip_cab"):
+                    note = "internal PKI: CA/B Forum lifetime limits do not apply"
                 elif r.get("exceeds_caps"):
                     note = "lifetime exceeds current " + r["exceeds_caps"][0].split("(")[0].strip().replace("CA/B Forum ", "")
                 elif r.get("exceeds_caps_future"):
@@ -736,7 +841,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
                     note = f"compliant now; reconfiguration required before {eff} ({eff_cap}-day cap)"
                 else:
                     note = "compliant through 2029 caps"
-                span = r["span_days"] if r["span_days"] is not None else "—"
+                span = r["span_days"] if r["span_days"] is not None else "-"
                 L.append(f"| {r['name']} | {r['days_left']} | {span} | {note} |")
             L.append("")
         over_current = [r for r in cposture["rows"] if r.get("exceeds_caps")]
@@ -750,7 +855,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
             eff = datetime.date.fromisoformat(eff_d).strftime("%B %Y")
             L.append(f"*{len(over_future)} certificate(s) are compliant today but will require reconfiguration "
                      f"before the {eff_cap}-day CA/Browser-Forum cap takes effect in {eff}. "
-                     "This is the crypto-agility planning case — renewal automation must be in place before then.*")
+                     "This is the crypto-agility planning case: renewal automation must be in place before then.*")
             L.append("")
 
     # ---- hardware posture (OS, TPM, HSM, network appliances) ----
@@ -758,21 +863,21 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("## Hardware posture")
         L.append("")
         ACTION_ORDER = {"replace": 0, "procure": 1, "upgrade": 2, "firmware-update": 3, "configure": 4}
-        CAPABLE_LABEL = {"true": "Yes", "partial": "Partial — firmware update",
+        CAPABLE_LABEL = {"true": "Yes", "partial": "Partial: firmware update",
                          "false": "No", "unknown": "Unverified"}
         ACTION_LABEL = {"replace": "Replace", "procure": "Procure", "upgrade": "OS upgrade",
                         "firmware-update": "Firmware update", "configure": "Configure"}
         gates = [h for h in hw if h["pqc_gate"]]
         if gates:
-            L.append("**Migration gates — these block progress on other migration work:**")
+            L.append("**Migration gates: these block progress on other migration work:**")
             L.append("")
             for h in gates:
                 act = ACTION_LABEL.get(h["action"], h["action"].replace("-", " ").title())
-                L.append(f"- **{h['name']}** ({act}) — {h['action_detail']}")
+                L.append(f"- **{h['name']}** ({act}): {h['action_detail']}")
             L.append("")
         tls12 = [h for h in hw if h.get("tls13") == "false"]
         if tls12:
-            L.append(f"**TLS 1.3 prerequisite — not yet enabled on {len(tls12)} system(s):**")
+            L.append(f"**TLS 1.3 prerequisite: not yet enabled on {len(tls12)} system(s):**")
             L.append("")
             L.append("PQC key exchange requires TLS 1.3. Software PQC updates have no effect until TLS 1.3 is active:")
             L.append("")
@@ -782,25 +887,25 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("| Component | PQC capable | Action |")
         L.append("|---|---|---|")
         for h in sorted(hw, key=lambda x: (ACTION_ORDER.get(x["action"], 9), x["name"])):
-            capable = CAPABLE_LABEL.get(h["pqc_capable"], h["pqc_capable"] or "—")
-            action = ACTION_LABEL.get(h["action"], h["action"].replace("-", " ").title() if h["action"] else "—")
+            capable = CAPABLE_LABEL.get(h["pqc_capable"], h["pqc_capable"] or "-")
+            action = ACTION_LABEL.get(h["action"], h["action"].replace("-", " ").title() if h["action"] else "-")
             L.append(f"| {h['name']} | {capable} | {action} |")
         L.append("")
 
     # ---- incidental: secret hygiene (NOT PQC) ----
     if secrets:
-        L.append("## Incidental — secret hygiene (NOT a PQC finding)")
+        L.append("## Incidental: secret hygiene (NOT a PQC finding)")
         L.append("")
         L.append("> The scanner's secret-detection layer (gitleaks) flagged **candidate** committed credentials. "
-                 "These are **not quantum-vulnerable cryptography** and do **not** affect the PQC readiness score — "
+                 "These are **not quantum-vulnerable cryptography** and do **not** affect the PQC readiness score: "
                  "reported here as a courtesy. **Verify before acting:** secret scanners false-positive, and some "
                  "tokens (e.g. read-only content-delivery tokens) may be intentionally public. No secret values are "
-                 "read or stored — locations only.")
+                 "read or stored: locations only.")
         L.append("")
         L.append("| Detection | Type | Location(s) |")
         L.append("|---|---|---|")
         for it in sorted(secrets, key=lambda x: x["name"]):
-            loc = ", ".join(f"`{p}`" for p in it["locations"]) or "—"
+            loc = ", ".join(f"`{p}`" for p in it["locations"]) or "-"
             L.append(f"| {it['name']} | {it['type']} | {loc} |")
         L.append("")
         L.append("*Recommended: verify each, rotate any live credential, remove from tracked files, and scrub git "
@@ -809,7 +914,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
 
     # ---- CBOM inventory appendix (the machine-readable inventory, human-legible) ----
     if not self_serve:
-        L.append("## Appendix A — CBOM inventory")
+        L.append("## Appendix A: CBOM inventory")
         L.append("")
         L.append("The algorithm assets underlying the score, for auditor traceability. The "
                  "authoritative artifact is the attached CycloneDX 1.6 CBOM (ECMA-424); this table is its "
@@ -822,11 +927,14 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
             if a["name"] in seen:
                 continue
             seen.add(a["name"])
-            status = ("vulnerable" if a["vulnerable"] == "True"
-                      else "resistant" if a["vulnerable"] == "False" else "review")
+            # same words as the policy result (policy._status), so the report and the result never disagree
+            status = ("broken" if a["priority"] == "Critical"
+                      else "vulnerable" if a["vulnerable"] == "True"
+                      else ("compliant" if (a["target"] or "").startswith("None") else "transitional")
+                      if a["vulnerable"] == "False" else "review")
             L.append(f"| {_mark(a)} | algorithm | {status} | {a['priority']} | {a['target']} |")
         for at, n in sorted(ocounts.items()):
-            L.append(f"| ({n}) | {at.replace('-', ' ')} | — | — | inventory only |")
+            L.append(f"| ({n}) | {at.replace('-', ' ')} | - | - | inventory only |")
         L.append("")
 
     # ---- FIPS 140-3 validation (CMVP) ----
@@ -839,26 +947,29 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     L.append("")
     cap_mode = mp.get("fedlin:mode") or mp.get("fedlin:capture") or "runtime + source capture"
     L.append(f"- **Capture:** {cap_mode}. FIPS posture at capture: {mp.get('fedlin:fips', 'not checked')}.")
+    if mp.get("fedlin:not_captured"):
+        L.append(f"- **Reached but not captured:** {mp['fedlin:not_captured']}.")
     if "endpoint-scan" in (cap_mode or ""):
-        L.append("- **Endpoint scan scope — certificate algorithms + TLS handshake kex:** the scan reads "
+        L.append("- **Endpoint scan scope: certificate algorithms + TLS handshake kex:** the scan reads "
                  "X.509 certificate public-key and signature algorithms, and additionally probes the TLS 1.3 "
                  "session key-exchange group negotiated during the handshake (e.g., X25519MLKEM768). Kex groups "
                  "appear in the CBOM as protocol assets and are scored independently from the certificate "
-                 "algorithms — an organization running ML-KEM hybrid key exchange in production receives credit "
+                 "algorithms: an organization running ML-KEM hybrid key exchange in production receives credit "
                  "for that posture even when the certificate itself still uses classical algorithms. "
                  "Note: OpenSSL in FIPS mode will not offer X25519MLKEM768; on such hosts the toolkit uses "
                  "its probe image (images/kex-probe, or FEDLIN_KEX_PROBE_IMAGE). Without one it tries a "
                  "reduced FIPS offer and records anything it could not observe as unknown.")
-    L.append("- **Deterministic classification (Mode C):** a versioned ruleset normalizes each algorithm "
+    L.append("- **Deterministic classification:** a versioned ruleset normalizes each algorithm "
              f"identifier and assigns its verdict under the {profile_label}, citing a primary source for each "
              "rule. No AI, no network at classification time, no re-classification at report time. "
              "The CBOM is the single source of truth.")
-    L.append("- **Reads no secrets, by construction:** the capture reads public certificate metadata, object names/counts, "
-             "and effective configuration only. No private key or secret value is ever read — secret-hygiene "
-             "detections report locations, never values.")
+    L.append("- **Secret values:** endpoint and cluster capture read public certificate metadata, object names and "
+             "counts, and effective configuration; secret values are not printed or stored. `--repo` and "
+             "`--theia-dir` read the files you name, which can include key files. Secret-hygiene detections "
+             "report locations, never values.")
     if review:
         L.append(f"- **Analyst review outstanding:** {len(review)} asset(s) the ruleset did not recognize are "
-                 "flagged for analyst sign-off before delivery — verdicts are not automated for these.")
+                 "flagged for analyst sign-off before delivery: verdicts are not automated for these.")
     if not self_serve and cap:
         L.append(f"- **Dependency-inferred capability (†):** {len(cap)} asset(s) are evidence a library *can* use "
                  "an algorithm, not proof it does; usage is analyst-confirmed.")
@@ -872,22 +983,23 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     L.append("")
     L.append(("This automated scan is a **starting** cryptographic inventory toward the requirements of:"
               if self_serve else
-              "This assessment produces the cryptographic inventory and migration plan called for by:"))
+              "This report is cryptographic-inventory evidence toward:"))
     L.append("")
-    L.append("- **EO 14412 — \"Securing the Nation Against Advanced Cryptographic Attacks\"** (June 2026) and "
-             "**OMB M-26-15** — PQC for key establishment by **2030** and digital signatures by **2031** for "
+    L.append("- **EO 14412: \"Securing the Nation Against Advanced Cryptographic Attacks\"** (June 2026) and "
+             "**OMB M-26-15**: PQC for key establishment by **2030** and digital signatures by **2031** for "
              "High Value Assets / high-impact systems (high-impact as defined by NSM-10).")
-    L.append("- **OMB M-26-15 — \"Execution of the Migration to Post-Quantum Cryptography\"** (June 2026) "
-             "— a five-phase federal roadmap to 2035; **Phase 1 (2026–27) is inventory** "
-             "of HVAs/high-impact systems, and civilian agencies submit migration plans by Oct 2026. This CBOM "
-             + ("+ roadmap is the Phase 1 inventory and plan" if has_roadmap else "is the Phase 1 inventory") +
-             ", in a machine-readable, standards-based (CycloneDX / ECMA-424) form"
-             + (" — an automated static scan is a partial inventory until runtime capture is added." if self_serve else "."))
-    L.append("- **NIST IR 8547 (final, October 2026)** — the algorithm-level transition timeline: every "
+    L.append("- **OMB M-26-15: \"Execution of the Migration to Post-Quantum Cryptography\"** (June 2026): "
+             "a five-phase federal roadmap to 2035; **Phase 1 (2026 to 2027) covers inventory** of HVAs and "
+             "high-impact systems. Agency migration plans were first due October 22, 2026, and the memo treats the "
+             "plan as a living document. This CBOM is inventory evidence for Phase 1 over the scope it declares "
+             "(coverage: " + _coverage(bom) + ")"
+             + (", and the roadmap supports the plan's sequencing" if has_roadmap else "")
+             + ", in a machine-readable, standards-based form (CycloneDX / ECMA-424).")
+    L.append("- **NIST IR 8547 (final, October 2026)**: the algorithm-level transition timeline: every "
              "quantum-vulnerable signature and key-establishment scheme is deprecated after 2030 and "
              "disallowed after 2035"
              + (", which the roadmap is sequenced against." if has_roadmap else ", which the migration should follow."))
-    L.append("- **CNSA 2.0** — the National Security Systems algorithm suite (ML-KEM-1024 / FIPS 203, "
+    L.append("- **CNSA 2.0**: the National Security Systems algorithm suite (ML-KEM-1024 / FIPS 203, "
              "ML-DSA-87 / FIPS 204, LMS/XMSS / SP 800-208 for firmware and code signing, AES-256, SHA-384/512)"
              + (", cited in every target above." if profile == "nss" else
                 "; the targets above follow the civilian profile (FIPS 203/204/205), run with "
@@ -903,7 +1015,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("## Attestation & integrity")
         L.append("")
         L.append("This report and its CycloneDX 1.6 CBOM are covered by a **detached SLH-DSA (FIPS 205) "
-                 "attestation** — `" + att + "` — binding the SHA-256 of each artifact and signed with a "
+                 "attestation**: `" + att + "`: binding the SHA-256 of each artifact and signed with a "
                  "quantum-resistant hash-based signature. A recipient can prove that neither the report nor the "
                  "CBOM was altered after FEDLIN signed it, and that it was signed by FEDLIN's holder of the "
                  "published signing key.")
@@ -911,7 +1023,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("Verify with the toolkit: `python3 sign.py verify " + att + "` "
                  "(re-hashes the artifacts and checks the signature; exit 0 = intact).")
         L.append("")
-        L.append("*SLH-DSA here provides commercial document-integrity signing of the deliverable — it is FIPS 205, "
+        L.append("*SLH-DSA here provides commercial document-integrity signing of the deliverable: it is FIPS 205, "
                  "quantum-resistant, and distinct from the CNSA 2.0/NSS signing targets (ML-DSA-87, LMS/XMSS) named "
                  "for the assessed estate above.*")
         L.append("")
@@ -931,6 +1043,10 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         "awaiting_review": len(review),
         "other_assets": ocounts,
         "hndl_exposures": len(hndl),
+        "configuration": {"endpoints_enumerated": sum(1 for r in server_configuration(bom) if r["status"] == "complete"),
+                          "endpoints_accepting_broken": sum(1 for r in server_configuration(bom) if r["broken"]),
+                          "broken_items_accepted": sorted({x.replace("accepts ", "") for r in server_configuration(bom)
+                                                           for x in r["broken"]})},
         "classical_fallback": {o: sum(1 for _, x, _ in fb if x == o) for o in dict.fromkeys(x for _, x, _ in fb)},
         "cmvp": _cmvp.summary(cmvp_found, cmvp_snap),
         "secret_hygiene_detections": len(secrets),
@@ -957,7 +1073,7 @@ def md_to_html(md_text, title="PQC Readiness Report"):
         import markdown as mdlib
         body = mdlib.markdown(md_text, extensions=["tables", "nl2br"])
     except ImportError:
-        # Fallback: wrap raw markdown in a <pre> — better than broken tables
+        # Fallback: wrap raw markdown in a <pre>: better than broken tables
         body = f"<pre>{md_text}</pre>"
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -986,7 +1102,19 @@ def _load_view(cbom_path, policy_path="", profile=None):
     if not policy_path and os.path.exists(sibling):
         policy_path = sibling
     if policy_path:
-        view, _ = policymod.load_view(cbom_path, policy_path)  # raises DigestMismatch on a mismatch
+        with open(policy_path) as f:
+            result = json.load(f)
+        c = policymod.check(result, cbom_path)
+        if not c["bound"]:
+            raise policymod.DigestMismatch(f"{cbom_path} does not match the digest recorded in {policy_path}")
+        if c["ok"]:
+            return policymod.apply(load(cbom_path), result, cbom_path)
+        # Never report verdicts that cannot be re-checked: evaluate now under the recorded profile.
+        why = ("its verdicts do not match a re-evaluation (" + "; ".join(c["mismatches"][:5]) + ")" if c["ruleset"]
+               else f"it was written by ruleset {((result.get('policy') or {}).get('version'))!r}, not this toolkit's")
+        prof = (result.get("policy") or {}).get("profile") or profile
+        sys.stderr.write(f"[warn] {policy_path} not used: {why}; evaluated now instead.\n")
+        view, _ = policymod.load_view(cbom_path, profile=prof if prof in policymod.cnsa.PROFILES else None)
         return view
     if policymod.has_verdicts(bom) and not profile:
         sys.stderr.write("[warn] legacy CBOM with inline verdicts; re-run the pipeline for a facts-only CBOM "
@@ -1008,7 +1136,7 @@ def main():
                     help="gated automated-scan variant (disclaimer, confidence bands, roadmap withheld)")
     ap.add_argument("--brand", default="FEDLIN", help="white-label the deliverable under a reseller's name")
     ap.add_argument("--attestation-name", default="",
-                    help="name of an EXISTING, VALID detached SLH-DSA attestation file — adds the integrity "
+                    help="name of an EXISTING, VALID detached SLH-DSA attestation file: adds the integrity "
                          "section only if that attestation exists and its signature verifies (deliverable is "
                          "signed with sign.py). Claim discipline: no signed section without a real signature.")
     ap.add_argument("--node", default="node", help="node binary for attestation verification")
@@ -1029,7 +1157,7 @@ def main():
 
     out = args.out or (args.cbom.rsplit(".", 1)[0] + ".report.md")
 
-    # Only claim a signature if the named attestation actually exists and its signature verifies —
+    # Only claim a signature if the named attestation actually exists and its signature verifies:
     # never assert "signed by FEDLIN" from the flag alone (claim discipline).
     signed = False
     if args.attestation_name:
@@ -1061,13 +1189,13 @@ def main():
                                attestation_name=args.attestation_name or None)
     with open(out, "w") as f:
         f.write(md + "\n")
-    print(f"[ok] report: {out} — score {summary['readiness_score']} ({summary['grade']}), "
+    print(f"[ok] report: {out}: score {summary['readiness_score']} ({summary['grade']}), "
           f"algorithms (all lanes): {summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
     if args.html:
         html_out = args.html if args.html != "auto" else out.replace(".md", ".html")
         sysname = summary.get("system", "system")
         with open(html_out, "w") as f:
-            f.write(md_to_html(md, title=f"PQC Readiness Report — {sysname}"))
+            f.write(md_to_html(md, title=f"PQC Readiness Report: {sysname}"))
         print(f"[ok] html: {html_out}")
     if args.json:
         with open(args.json, "w") as f:
