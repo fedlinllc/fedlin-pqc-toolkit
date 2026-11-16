@@ -380,4 +380,4 @@ https://fedlin.com.
 
 Apache-2.0. See [LICENSE](LICENSE).
 
-Maintained by FEDLIN LLC.
+Maintained by FEDLIN LLC ([fedlinllc](https://github.com/fedlinllc) on GitHub).
