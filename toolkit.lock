@@ -1,4 +1,4 @@
-# fedlin-pqc-toolkit: pinned versions (v1.1.0)
+# fedlin-pqc-toolkit: pinned versions (v1.2.0)
 # Reproducibility manifest. Update deliberately; the OCI image + setup.sh should match these.
 # Format: component = version/ref (source)
 

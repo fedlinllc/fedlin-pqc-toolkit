@@ -11,6 +11,29 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-16
+
+### Added
+- Migration wave check (`scripts/wave.py`, schema `schemas/wave-1.0.schema.json`, pipeline flag `--wave`): a
+  wave file states what a wave promises per endpoint (findings resolved, ML-KEM negotiated or accepted,
+  classical-only clients refused, certificate replaced), and the check tests each item against a later scan.
+  An item passes only on what that scan itself observed (its own records, a complete enumeration where the
+  check needs one); otherwise it is "not observed", never passed. With `--baseline`, regressions at the
+  wave's endpoints are listed where both scans could see.
+- The primary certificate of each endpoint now records `fedlin:sha256Fingerprint` (additional certificates
+  already did), and each certificate and TLS interface records `fedlin:observedIn`, the serial number of the
+  scan that observed it. A merged CBOM keeps the scan's own serial number.
+- The TLS interface records `fedlin:certificateProbes`: what the certificate probe of each signature-scheme
+  family got back (a certificate, a refusal, or no answer). The probes now keep the server's alerts.
+
+### Changed
+- `--baseline` is available in the public toolkit for `--wave` regressions; the delta report it also produces
+  remains part of the engagement kit.
+
+### Fixed
+- Two endpoints whose names differ only in punctuation (a-b.example.com and a.b.example.com) no longer share
+  one certificate or interface record.
+
 ## [1.1.0] - 2026-11-16
 
 ### Added
@@ -86,6 +109,7 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.8.0...v1.0.0

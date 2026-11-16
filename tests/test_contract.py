@@ -19,7 +19,7 @@ CBOM_PROPERTIES = {
     "fedlin:enumeration", "fedlin:enumerationTool", "fedlin:acceptedProtocolVersions",
     "fedlin:untestedProtocolVersions", "fedlin:acceptedGroups", "fedlin:refusedGroups", "fedlin:untestedGroups",
     "fedlin:dhGroupBits", "fedlin:enumerationTruncated", "fedlin:enumerationIncomplete", "fedlin:enumerationNote", "fedlin:certificateSelectedBy",
-    "fedlin:sha256Fingerprint", "fedlin:not_captured",
+    "fedlin:sha256Fingerprint", "fedlin:not_captured", "fedlin:observedIn", "fedlin:certificateProbes",
     "fedlin:capability", "fedlin:capture", "fedlin:chain_depth", "fedlin:classicalOnlyCommand",
     "fedlin:classicalOnlyNegotiated", "fedlin:classicalOnlyOffer", "fedlin:classicalOnlyOfferReduced",
     "fedlin:classicalOnlyTool", "fedlin:etcd_encryption", "fedlin:evidence", "fedlin:fips_enabled",
@@ -49,12 +49,16 @@ SUMMARY_KEYS = {"algorithms_classified", "awaiting_review", "cbom_timestamp", "c
 CLI_FLAGS = {"--version", "--out", "--name", "--repo", "--theia-dir", "--theia-image", "--cdxgen", "--theia",
              "--cyclonedx", "--validate", "--redact", "--profile", "--subject-tag", "--regime", "--deep",
              "--debug-image", "--kube-cli", "--report", "--merge-cbom", "--exclude", "--no-dep-crypto",
-             "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime"}
+             "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime", "--wave"}
 EVIDENCE_SOURCES = {  # STABILITY.md "Evidence sources": source -> (technique, confidence)
     "handshake": ("dynamic-analysis", 1.0), "probe": ("dynamic-analysis", 1.0),
     "configuration": ("other", 0.8), "file": ("other", 0.8),
     "dependency": ("manifest-analysis", 0.3), "assumption": ("other", 0.1),
 }
+WAVE_RESULT_KEYS = {"resultFormat", "resultFormatVersion", "evaluationDate", "wave", "profile", "rulesetVersion",
+                    "rulesetDigest", "documents", "passed", "summary", "items", "regressions", "notCompared"}
+WAVE_DOC_KEYS = {"file", "sha256", "serialNumber", "timestamp", "toolkitVersion"}
+WAVE_ITEM_KEYS = {"id", "check", "endpoint", "status", "detail"}
 MCP_TOOLS = {"list_files": set(), "verify_policy": {"cbom", "policy"},
              "summarize": {"cbom", "policy", "profile"}, "pqcmm_evidence": {"cbom", "answers", "profile"},
              "vendor_readiness": {"answers", "profile"}, "lookup_verdict": {"name", "bits", "profile"}}
@@ -134,6 +138,22 @@ class Contract(unittest.TestCase):
             self.assertEqual(ident[0]["field"], "name")
             for m in ident[0]["methods"]:
                 self.assertTrue(m["value"].startswith("fedlin-pqc-toolkit/"))
+
+    def test_wave_result(self):
+        import wave
+        from test_wave import WAVE, after_doc, before_doc
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for name, obj in (("w.json", WAVE), ("a.json", after_doc()), ("b.json", before_doc())):
+                paths.append(os.path.join(d, name))
+                _dump(obj, paths[-1])
+            r = wave.check(*paths)
+        self.assertEqual(WAVE_RESULT_KEYS - set(r), set())
+        self.assertEqual(WAVE_DOC_KEYS - set(r["documents"]["cbom"]), set())
+        for item in r["items"]:
+            self.assertEqual(WAVE_ITEM_KEYS - set(item), set())
+        self.assertEqual(set(wave.CHECKS), {"findings-resolved", "mlkem", "refuses-classical-only",
+                                            "certificate-replaced"})
 
     def test_cli_flags(self):
         flags = set(re.findall(r'add_argument\("(--[a-z0-9-]+)"', _source("tier2_pipeline.py")))

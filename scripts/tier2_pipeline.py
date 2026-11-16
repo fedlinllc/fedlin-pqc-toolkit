@@ -28,6 +28,7 @@ import cnsa20_ruleset as cnsa
 import evidence as evmod
 import policy as policymod
 import report as reportmod
+import wave as wavemod
 
 # Optional private modules (FEDLIN engagement kit). The public toolkit runs without them; their flags
 # are hidden from --help and refused with a clear message when the module is absent.
@@ -40,7 +41,6 @@ try:
 except ImportError:
     signmod = None
 KIT_FLAGS = {
-    "baseline": deltamod is not None,
     "sign": signmod is not None, "slh_key": signmod is not None, "slh_variant": signmod is not None,
     "node": signmod is not None,
     "self_serve": reportmod._roadmap is not None,
@@ -49,7 +49,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.1.0"
+TOOLKIT_VERSION = "1.2.0"
 
 
 def run(cmd, timeout=25):
@@ -357,6 +357,8 @@ _LEGACY = "'ALL:COMPLEMENTOFALL:@SECLEVEL=0'"
 # Alerts the server sends when it refuses what was offered. Received alerts print "SSL alert number N";
 # errors the client raises itself (e.g. "dh key too small") do not, and are never read as a server refusal.
 _SERVER_REFUSAL = re.compile(r"SSL alert number (40|47|70|71)\b")
+_CERT_MISMATCH = re.compile(r"wrong signature type|wrong certificate type|no suitable signature algorithm|"
+                            r"unknown certificate type|unsupported certificate", re.I)
 _VERSION_REFUSAL = re.compile(r"SSL alert number 70\b|alert protocol version")
 
 
@@ -391,9 +393,12 @@ def _enum_script(binary, hp, sni, pace=0.0):
         L.append(f'echo "=== GROUP13 {g}"; echo | {o} -tls1_3 -groups {g} 2>&1 | {keep}')
         if "mlkem" not in g.lower():  # classical groups are also offered in TLS 1.2 (ECDHE / RFC 7919 DHE)
             L.append(f'echo "=== GROUP12 {g}"; echo | {o} -tls1_2 -cipher {_LEGACY} -groups {g} 2>&1 | {keep}')
+    # Certificate probes keep the server's alerts too, so a probe with no answer is told apart from a refusal.
     for label, algs in _ENUM_SIGALGS:
-        L.append(f'echo "=== CERT {label}"; echo | {o} -cipher {_LEGACY} -sigalgs {algs} 2>/dev/null | {cert}')
-    L.append(f'echo "=== CERT ANY"; echo | {o} -cipher {_LEGACY} 2>/dev/null | {cert}')
+        L.append(f'echo "=== CERT {label}"; out=$(echo | {o} -cipher {_LEGACY} -sigalgs {algs} 2>&1); '
+                 f'printf "%s\\n" "$out" | {keep}; printf "%s\\n" "$out" | {cert}')
+    L.append(f'echo "=== CERT ANY"; out=$(echo | {o} -cipher {_LEGACY} 2>&1); '
+             f'printf "%s\\n" "$out" | {keep}; printf "%s\\n" "$out" | {cert}')
     if pace and pace > 0:
         gap = f"; sleep {float(pace):g}; "
         L = [x.replace("n=$((n+1)); done", f"n=$((n+1)); sleep {float(pace):g}; done") for x in L]
@@ -419,7 +424,7 @@ def _parse_enum(out):
             sections[cur].append(line)
     text = lambda k: "\n".join(sections.get(k, []))  # noqa: E731
     res = {"tool": (sections.get("TOOL") or ["openssl"])[0], "versions": {}, "suites": {}, "groups": {},
-           "dh_bits": [], "certs": [], "truncated": [], "incomplete": []}
+           "dh_bits": [], "certs": [], "truncated": [], "incomplete": [], "cert_probes": {}}
     for key in ("default", "legacy"):
         t = text(key.upper())
         proto, cipher = _parse_session(t)
@@ -463,6 +468,13 @@ def _parse_enum(out):
             group_states.setdefault(g, []).append(state)
         elif k.startswith("CERT "):
             c = _parse_cert_text(text(k))
+            # certificate: the server presented one; refused: it sent a refusal alert; None: no answer
+            # (a client that aborts because the server sent a certificate of another family was answered too)
+            # refused and mismatch need a connection: a client that fails its own setup has asked nothing
+            connected = "CONNECTED(" in text(k)
+            res["cert_probes"][k.split(" ", 1)[1]] = "certificate" if c else (
+                "refused" if connected and _SERVER_REFUSAL.search(text(k)) else
+                "mismatch" if connected and _CERT_MISMATCH.search(text(k)) else None)
             if c:
                 c["requested"] = k.split(" ", 1)[1]
                 if not any(x["fingerprint"] == c["fingerprint"] for x in res["certs"]):
@@ -885,6 +897,9 @@ def _is_windows_collector(c):
 
 class CBOM:
     def __init__(self, system_name, system_ver, context, regime=None):
+        # Serial number of this scan's CBOM. Records this run observed carry it as fedlin:observedIn, so a
+        # record merged in from another CBOM never counts as observed by this scan (scripts/wave.py).
+        self.serial = f"urn:uuid:{uuid.uuid4()}"
         self.components = []
         self.dependencies = []
         self._algo_refs = {}
@@ -898,6 +913,16 @@ class CBOM:
         self._cert_algos = {}        # host -> [(ref, name)] of the served certificate's key and signature
         self._cert_bits = {}         # host -> certificate key size (EC field size names the curve)
         self._interfaces = 0
+        self._ref_owner = {}         # bom-ref -> host, so two hosts that slug alike never share a record id
+
+    def _unique_ref(self, ref, host):
+        """ref for this host; a different host whose name slugs to the same ref gets a hash suffix."""
+        owner = self._ref_owner.setdefault(ref, host)
+        if owner != host:
+            import hashlib
+            ref = f"{ref}-{hashlib.sha256(host.encode()).hexdigest()[:8]}"
+            self._ref_owner[ref] = host
+        return ref
 
     def algo_ref(self, name, bits=None, source=None, location=None):
         """The algorithm's record; `source` adds how it was observed (several sources may share one)."""
@@ -933,7 +958,8 @@ class CBOM:
 
     def add_certificate(self, c, extra=None):
         """extra: label of an additional certificate the same endpoint serves (e.g. "RSA" next to ECDSA)."""
-        ref = f"crypto/cert/{slug(c['host'])}" + (f"-{slug(extra)}-{c['fingerprint'][:12]}" if extra else "")
+        ref = self._unique_ref(f"crypto/cert/{slug(c['host'])}"
+                               + (f"-{slug(extra)}-{c['fingerprint'][:12]}" if extra else ""), c["host"])
         src = "probe" if extra else "handshake"
         key_ref = self.algo_ref(c["key_alg"], c.get("key_bits"), src, c["host"])
         deps = [key_ref]
@@ -963,13 +989,15 @@ class CBOM:
             "cryptoProperties": {"assetType": "certificate", "certificateProperties": cp},
         }
         evmod.stamp(comp, src, c["host"])
-        props = []
+        props = [{"name": "fedlin:observedIn", "value": self.serial}]
         if c.get("chain_depth"):
             props.append({"name": "fedlin:chain_depth", "value": str(c["chain_depth"])})
         if extra:
             props += [{"name": "fedlin:host", "value": c["host"]},
                       {"name": "fedlin:certificateSelectedBy", "value": f"client offering {extra} signature schemes only"},
                       {"name": "fedlin:sha256Fingerprint", "value": c["fingerprint"]}]
+        elif c.get("fingerprint"):
+            props.append({"name": "fedlin:sha256Fingerprint", "value": c["fingerprint"]})
         if props:
             comp["properties"] = props
         self.components.append(comp)
@@ -994,7 +1022,7 @@ class CBOM:
             if name:
                 deps.append(self.algo_ref(name, None, src, host))
         version = protocol[4:] if protocol and protocol.startswith("TLSv") else None
-        ref = f"crypto/proto/tls/{slug(host)}"
+        ref = self._unique_ref(f"crypto/proto/tls/{slug(host)}", host)
         pp = {"type": "tls"}
         if version:
             pp["version"] = version
@@ -1005,7 +1033,8 @@ class CBOM:
         if related:
             pp["cryptoRefArray"] = sorted(set(related))
         P = "pkic:profile:"
-        props = [{"name": P + "interfaceType", "value": "service"},
+        props = [{"name": "fedlin:observedIn", "value": self.serial},
+                 {"name": P + "interfaceType", "value": "service"},
                  {"name": P + "lifecycleStage", "value": "observed"},
                  {"name": P + "endpointRole:server", "value": f"endpoint:{host}"},
                  {"name": P + "endpointRole:client", "value": "endpoint:fedlin-pqc-toolkit-scan"},
@@ -1057,6 +1086,10 @@ class CBOM:
                 props.append({"name": "fedlin:refusedGroups", "value": ",".join(g_no) or "none"})
                 if en.get("dh_bits"):
                     props.append({"name": "fedlin:dhGroupBits", "value": ",".join(str(b) for b in en["dh_bits"])})
+                if en.get("cert_probes"):
+                    # per signature-scheme family: what the certificate probe got back (none = no answer)
+                    props.append({"name": "fedlin:certificateProbes", "value": ",".join(
+                        f"{k}:{v or 'none'}" for k, v in en["cert_probes"].items())})
                 if en.get("truncated"):
                     props.append({"name": "fedlin:enumerationTruncated", "value": ",".join(en["truncated"])})
                 if en.get("incomplete"):
@@ -1143,7 +1176,7 @@ class CBOM:
         props = [{"name": f"fedlin:{k}", "value": str(v)} for k, v in self.context.items()]
         return {
             "bomFormat": "CycloneDX", "specVersion": "1.6",
-            "serialNumber": f"urn:uuid:{uuid.uuid4()}", "version": 1,
+            "serialNumber": self.serial, "version": 1,
             "metadata": {
                 "timestamp": ts,
                 "component": self._subject(),
@@ -1517,7 +1550,11 @@ def main():
     ap.add_argument("--report", action="store_true",
                     help="also emit an executive scorecard + migration roadmap (<out>.report.md)")
     ap.add_argument("--baseline", default="",
-                    help="prior CBOM to diff against -> continuous-monitoring delta (<out>.delta.md)")
+                    help="CBOM of an earlier scan: with --wave, regressions at the wave's endpoints; in the "
+                         "engagement kit, also the continuous-monitoring delta (<out>.delta.md)")
+    ap.add_argument("--wave", default="",
+                    help="wave file (fedlin.pqc-wave 1.0): after the scan, check each declared item against it "
+                         "(writes <out>.wave.json and .wave.md; with --baseline, also lists regressions)")
     ap.add_argument("--merge-cbom", action="append", default=[],
                     help="path to an externally-generated CycloneDX CBOM to fold in (repeatable), e.g. a "
                          "CBOMkit source scan produced out-of-band by scripts/run-cbomkit.sh (source coverage)")
@@ -1577,6 +1614,23 @@ def main():
     bad = []
     if args.endpoints and not parse_endpoints(args.endpoints):
         bad.append("--endpoints: no valid hostname or IP in the values given")
+    if args.wave:
+        try:
+            wv = wavemod.load_wave(args.wave)
+            if "profile" not in wv and args.profile != "civilian":
+                sys.stderr.write(f"[warn] --wave: the wave file names no profile, so it is checked under civilian, "
+                                 f"not --profile {args.profile}; add \"profile\" to the wave file\n")
+        except wavemod.WaveError as e:
+            bad.append(f"--wave: {e}")
+        if args.no_enumerate or args.no_classical_probe:
+            sys.stderr.write("[warn] --wave with --no-enumerate or --no-classical-probe: items that need what the "
+                             "server accepts, its other certificates or the classical-only probe will be "
+                             "\"not observed\"\n")
+    if args.baseline and not os.path.isfile(args.baseline):
+        bad.append(f"--baseline {args.baseline}: not a file")
+    elif args.baseline and deltamod is None and not args.wave:
+        sys.stderr.write("[warn] --baseline does nothing in this build without --wave (the delta report is part "
+                         "of the engagement kit)\n")
     for x in args.merge_cbom:
         if not os.path.isfile(x):
             bad.append(f"--merge-cbom {x}: not a file")
@@ -1776,6 +1830,7 @@ def main():
     # A merge can replace metadata.component and drop metadata.lifecycles; the subject and the stage
     # describe what was scanned, so they always come from the runtime builder.
     final.setdefault("metadata", {})["component"] = doc["metadata"]["component"]
+    final["serialNumber"] = doc["serialNumber"]   # the scan's identity; fedlin:observedIn refers to it
     # cyclonedx-cli turns each input's metadata.component into a component; the subject's bom-ref ("system")
     # must stay unique (CycloneDX requires unique bom-refs).
     subj = doc["metadata"]["component"].get("bom-ref")
@@ -1863,7 +1918,7 @@ def main():
             sys.stderr.write(f"[warn] report generation failed: {e}\n")
 
     # --- delta vs prior baseline (continuous-monitoring evidence) ---
-    if args.baseline:
+    if args.baseline and deltamod is not None:
         dpath = args.out.rsplit(".", 1)[0] + ".delta.md"
         dsumm = args.out.rsplit(".", 1)[0] + ".delta.summary.json"
         try:
@@ -1880,7 +1935,26 @@ def main():
         except Exception as e:
             sys.stderr.write(f"[warn] delta generation failed: {e}\n")
 
-    # --- sign (detached SLH-DSA attestation over CBOM + report [+ delta]) ---
+    # --- migration wave check (each declared item against this scan) ---
+    wpath = out_base + ".wave.json"
+    for stale in (wpath, out_base + ".wave.md"):
+        if os.path.exists(stale):   # never sign or ship a wave result from an earlier run
+            os.remove(stale)
+    if args.wave:
+        try:
+            wres = wavemod.check(args.wave, args.out, args.baseline or None)
+            with open(wpath, "w") as f:
+                json.dump(wres, f, indent=2)
+            with open(out_base + ".wave.md", "w") as f:
+                f.write(wavemod.markdown(wres))
+            s_ = wres["summary"]
+            print(f"[{'ok' if wres['passed'] else 'not passed'}] wave check: {s_['pass']}/{s_['items']} passed, "
+                  f"{s_['fail']} failed, {s_['not-observed']} not observed -> {wpath}")
+        except Exception as e:
+            sys.stderr.write(f"[error] wave check failed: {e}\n")
+            sys.exit(2)
+
+    # --- sign (detached SLH-DSA attestation over CBOM + report [+ delta] [+ wave result]) ---
     if args.sign:
         dpath = out_base + ".delta.md"
 
@@ -1898,6 +1972,8 @@ def main():
                 a.append(rpt)
             if args.baseline and os.path.exists(dpath):
                 a.append(dpath)
+            if args.wave and os.path.exists(wpath):
+                a += [args.wave, wpath, out_base + ".wave.md"]
             return a
 
         # bind the CBOM's own timestamp so the attestation is deterministic (not a clock read)

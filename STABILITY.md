@@ -13,6 +13,7 @@ properties, flags and tools may be added. A change that breaks any of them requi
 | Policy result | The `pkic.cbom.policy-result` 0.1 top-level keys, the `policy` block (id, version, profile, ruleset digest) and the finding keys |
 | CBOM evidence | From 1.1.0: `evidence.identity` (field `name`) on the cryptographic records the toolkit writes, with one method per source as in the table below; method values start with `fedlin-pqc-toolkit/<source>:` |
 | `summary.json` | The keys of the report summary |
+| Wave file and result | From 1.2.0: schema `fedlin.pqc-wave` 1.0 ([schema](schemas/wave-1.0.schema.json)) with its four checks (`findings-resolved`, `mlkem`, `refuses-classical-only`, `certificate-replaced`); result `fedlin.pqc-wave-result` 1.0 top-level, document and item keys (item status `pass`, `fail`, `not-observed`); `scripts/wave.py check` exit codes `0` passed, `1` not passed, `2` invalid input |
 | Verdict table | Schema `fedlin.pqc-verdict-table` 1.0 ([schema](schemas/verdict-table-1.0.schema.json)) and its lookup rule |
 | CLI | The flags of `scripts/tier2_pipeline.py` listed in `tests/test_contract.py`, and exit codes: `0` success, `2` invalid input or arguments, any other non-zero code is passed through from a tool the pipeline ran |
 | MCP server | Tool names and argument names of `scripts/mcp_server.py` |

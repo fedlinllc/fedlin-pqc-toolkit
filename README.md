@@ -142,6 +142,49 @@ inputs use the same bom-ref).
 Evidence is a fact about the record: it does not change verdicts or the score. The report counts records by
 how they were observed.
 
+## Prove a migration wave
+
+A wave file (`fedlin.pqc-wave` 1.0, [schema](schemas/wave-1.0.schema.json)) states what a migration wave
+promises, per endpoint. After the work, scan again and check it:
+
+```bash
+python3 scripts/wave.py check --wave wave.json --cbom after/cbom.json --baseline before/cbom.json
+# or in one step: python3 scripts/tier2_pipeline.py --endpoints ... --wave wave.json --baseline before/cbom.json
+```
+
+| Check | Passes when |
+|---|---|
+| `findings-resolved` | no finding with the given priorities remains at the endpoint (only in the given lanes, if any) |
+| `mlkem` | the recorded session negotiated an ML-KEM group meeting the profile (nss: ML-KEM-1024); with `"mode": "accepts"`, or the server accepts one |
+| `refuses-classical-only` | a client offering only classical key exchange was refused |
+| `certificate-replaced` | the endpoint no longer serves the baseline certificate and, if named, a served certificate has the expected key and signature algorithms (with key size, curve and hash where named) |
+
+An item passes only on what this scan itself observed, and is "not observed" otherwise:
+
+- records count only if this scan run observed them (`fedlin:observedIn`, written from 1.2.0), so records
+  merged in from another CBOM never count;
+- what the server accepts needs a complete, untruncated enumeration (not `--no-enumerate`), and ML-KEM groups
+  it accepts need the group probes to have been answered;
+- a statement about every certificate the endpoint serves needs an answer (a certificate or a refusal) from
+  the certificate probe of every signature-scheme family, recorded as `fedlin:certificateProbes`;
+- a key-exchange item needs the key exchange to have been seen, and `refuses-classical-only` needs the
+  classical-only probe; it fails if enumeration shows classical key exchange accepted anyway (a classical
+  group offered alone, TLS 1.2 or older, or finite-field DHE).
+
+Verdicts are evaluated afresh with this toolkit's ruleset. With `--baseline`, Critical or High findings at the
+wave's endpoints that are new or worse than in the baseline are listed as regressions: anything the server
+newly accepts; a new certificate worse than the one in the same slot before (a certificate the baseline already
+served, by fingerprint, is never new, and replacing a broken certificate with a quantum-vulnerable one is
+progress); a finding that rose in priority, such as an RSA key cut to 1024 bits; a negotiated session that
+got worse. They are compared only where both
+scans could see, and everything else is listed under `notCompared`, so "no regression" is never claimed for
+what was not compared. The baseline must be older and, if the wave names one, the scan it was planned from; a
+baseline from toolkit 1.1 is accepted on its evidence. The result (`fedlin.pqc-wave-result` 1.0)
+records the SHA-256, serial number, time and toolkit version of each file and the ruleset digest. It is only as
+trustworthy as the CBOM it reads; a signed attestation over both is what ties them to the scan.
+`scripts/wave.py check` exits `0` passed, `1` not passed, `2` invalid input; in the pipeline the exit code
+reflects the scan, so read `passed` in `<out>.wave.json`.
+
 ## Verdict profiles
 
 Quantum vulnerability is a property of the algorithm and does not change by profile. What changes is
