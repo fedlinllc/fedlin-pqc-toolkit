@@ -11,7 +11,7 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
-## [1.0.0-rc.1] - 2026-11-16
+## [1.0.0] - 2026-11-16
 
 First release under the [stability promise](STABILITY.md) for machine-readable outputs. Earlier releases are
 listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
@@ -61,5 +61,5 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.0.0-rc.1...HEAD
-[1.0.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.8.0...v1.0.0-rc.1
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.8.0...v1.0.0
