@@ -25,6 +25,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling modules, also under python -I
 import cnsa20_ruleset as cnsa
+import evidence as evmod
 import policy as policymod
 import report as reportmod
 
@@ -48,7 +49,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.0.0"
+TOOLKIT_VERSION = "1.1.0"
 
 
 def run(cmd, timeout=25):
@@ -871,11 +872,23 @@ def _identity_props(v, name=None, bits=None):
     return out
 
 
+def _placeholder(name):
+    """A name the toolkit wrote because it could not read the real one (no identity to vouch for)."""
+    return str(name or "").startswith("unparsed")
+
+
+def _is_windows_collector(c):
+    """A record from FEDLIN's Windows collector (scripts/collect-windows.ps1), merged with --merge-cbom."""
+    return any(p.get("name") == "fedlin:source" and str(p.get("value", "")).startswith("windows-collector")
+               for p in c.get("properties", []) or [])
+
+
 class CBOM:
     def __init__(self, system_name, system_ver, context, regime=None):
         self.components = []
         self.dependencies = []
         self._algo_refs = {}
+        self._by_ref = {}            # bom-ref -> component (algorithm records), for evidence on reuse
         self.system_name = system_name
         self.system_ver = system_ver
         self.context = context
@@ -886,10 +899,14 @@ class CBOM:
         self._cert_bits = {}         # host -> certificate key size (EC field size names the curve)
         self._interfaces = 0
 
-    def algo_ref(self, name, bits=None):
+    def algo_ref(self, name, bits=None, source=None, location=None):
+        """The algorithm's record; `source` adds how it was observed (several sources may share one)."""
         key = slug(f"{name}-{bits or ''}")
         if key in self._algo_refs:
-            return self._algo_refs[key]
+            ref = self._algo_refs[key]
+            if source:
+                evmod.stamp(self._by_ref[ref], source, location, identify=not _placeholder(name))
+            return ref
         ref = f"crypto/algo/{key}"
         v = cnsa.classify(name, bits)
         ap = {"primitive": v["primitive"], "cryptoFunctions": v["crypto_functions"]}
@@ -907,14 +924,18 @@ class CBOM:
             "cryptoProperties": {"assetType": "algorithm", "algorithmProperties": ap},
             "properties": props,
         }
+        if source:
+            evmod.stamp(comp, source, location, identify=not _placeholder(name))
         self.components.append(comp)
         self._algo_refs[key] = ref
+        self._by_ref[ref] = comp
         return ref
 
     def add_certificate(self, c, extra=None):
         """extra: label of an additional certificate the same endpoint serves (e.g. "RSA" next to ECDSA)."""
         ref = f"crypto/cert/{slug(c['host'])}" + (f"-{slug(extra)}-{c['fingerprint'][:12]}" if extra else "")
-        key_ref = self.algo_ref(c["key_alg"], c.get("key_bits"))
+        src = "probe" if extra else "handshake"
+        key_ref = self.algo_ref(c["key_alg"], c.get("key_bits"), src, c["host"])
         deps = [key_ref]
         if not extra:
             self._cert_algos[c["host"]] = [(key_ref, c["key_alg"])] + (
@@ -927,7 +948,7 @@ class CBOM:
             "subjectPublicKeyRef": key_ref,
         }
         if c.get("sig_alg"):
-            sig_ref = self.algo_ref(c["sig_alg"])
+            sig_ref = self.algo_ref(c["sig_alg"], None, src, c["host"])
             if not extra:
                 self._cert_algos[c["host"]][-1] = (sig_ref, c["sig_alg"])
             cp["signatureAlgorithmRef"] = sig_ref
@@ -941,6 +962,7 @@ class CBOM:
             "name": c["host"] + (f" ({extra} certificate)" if extra else ""),
             "cryptoProperties": {"assetType": "certificate", "certificateProperties": cp},
         }
+        evmod.stamp(comp, src, c["host"])
         props = []
         if c.get("chain_depth"):
             props.append({"name": "fedlin:chain_depth", "value": str(c["chain_depth"])})
@@ -966,9 +988,11 @@ class CBOM:
         if not (kex_group or protocol or cipher or (enumeration or {}).get("status") == "complete"):
             return
         deps = []
+        # The negotiated session is a handshake observation; with no session, only the probes saw it.
+        src = "handshake" if (kex_group or protocol or cipher) else "probe"
         for name in (kex_group, cipher, protocol):
             if name:
-                deps.append(self.algo_ref(name))
+                deps.append(self.algo_ref(name, None, src, host))
         version = protocol[4:] if protocol and protocol.startswith("TLSv") else None
         ref = f"crypto/proto/tls/{slug(host)}"
         pp = {"type": "tls"}
@@ -1053,12 +1077,15 @@ class CBOM:
             for k, name in (("tool", "fedlin:classicalOnlyTool"), ("command", "fedlin:classicalOnlyCommand")):
                 if co.get(k):
                     props.append({"name": name, "value": co[k]})
-        self.components.append({
+        comp = {
             "type": "cryptographic-asset", "bom-ref": ref,
             "name": f"TLS {version or '(version not observed)'} - {host}",
             "cryptoProperties": {"assetType": "protocol", "protocolProperties": pp},
             "properties": props,
-        })
+        }
+        # The interface's own facts are the recorded session; what enumeration accepted is in its properties.
+        evmod.stamp(comp, src, host)
+        self.components.append(comp)
         self.dependencies.append({"ref": ref, "dependsOn": sorted(set(deps))})
         self._interfaces += 1
 
@@ -1067,24 +1094,24 @@ class CBOM:
         for a in ssh.get("kex", []) + ssh.get("hostkeys", []) + ssh.get("ciphers", []):
             if cnsa.is_pseudo(a):  # protocol markers such as ext-info-c, kex-strict-*
                 continue
-            algos.append(self.algo_ref(a))
+            algos.append(self.algo_ref(a, None, "configuration"))
         ref = "crypto/proto/ssh"
         # Configuration evidence (sshd -T on this host), not an observed interface: one PKIC document
         # carries one lifecycle stage, and the TLS interfaces are observed. A remote SSH handshake scan
         # (observed) would make this an interface.
-        self.components.append({
+        self.components.append(evmod.stamp({
             "type": "cryptographic-asset", "bom-ref": ref, "name": ssh.get("version", "OpenSSH"),
             "cryptoProperties": {"assetType": "protocol",
                                  "protocolProperties": {"type": "ssh", "version": "2.0"}},
             "properties": [{"name": "fedlin:evidence", "value": "configured (sshd -T, local host)"}],
-        })
+        }, "configuration", None, "sshd -T"))
         if algos:
             self.dependencies.append({"ref": ref, "dependsOn": sorted(set(algos))})
 
     def add_sealed_secrets(self, count):
         ref = "crypto/material/sealed-secrets-key"
-        key_ref = self.algo_ref("rsaEncryption", 4096)
-        self.components.append({
+        key_ref = self.algo_ref("rsaEncryption", 4096, "assumption")
+        self.components.append(evmod.stamp({
             "type": "cryptographic-asset", "bom-ref": ref, "name": "sealed-secrets-sealing-key",
             "cryptoProperties": {"assetType": "related-crypto-material",
                                  "relatedCryptoMaterialProperties": {
@@ -1095,7 +1122,7 @@ class CBOM:
                                                      "SealedSecret object count; key not read)"},
                 {"name": "fedlin:hndl_exposure", "value": "RSA-wrapped ciphertext (SealedSecrets are usually committed to version control)"},
             ],
-        })
+        }, "assumption", None, "key not read; size assumed from the controller default"))
         self.dependencies.append({"ref": ref, "dependsOn": [key_ref]})
 
     def _subject(self):
@@ -1225,6 +1252,7 @@ def detect_library_crypto(doc):
                 {"name": "fedlin:capability", "value": "true"},
             ],
         }
+        evmod.stamp(comp, "dependency", None, ", ".join(sorted(pkgs)))
         doc.setdefault("components", []).append(comp)
         added += 1
     return added
@@ -1307,18 +1335,22 @@ def fallback_cert_scan(theia_dir, doc, openssl_bin="openssl"):
             "evidence": {"occurrences": [{"location": os.path.basename(f)}]},
             "properties": [{"name": "fedlin:source", "value": "fallback-cert-parser (cbomkit-theia OID gap)"}],
         })
+        evmod.stamp(comps[-1], "file", None, "OpenSSL x509 parse")
         added += 1
     return added
 
 
-def filter_excluded(doc, patterns):
+def filter_excluded(doc, patterns, keep_refs=()):
     """Drop components whose evidence location matches an --exclude glob/substring.
 
     Location-based, so it cuts noise from any tool that records occurrences (e.g. gitleaks
-    hits in docs/, scratch/, *.backup). Components without a location (cdxgen deps) are kept.
+    hits in docs/, scratch/, *.backup). Components without a location (cdxgen deps) are kept, and so
+    are the records this toolkit captured itself (keep_refs): --exclude filters merged file scans,
+    never the endpoints, SSH or cluster records the scan observed.
     """
     if not patterns:
         return 0
+    keep_refs = set(keep_refs)
 
     def loc_match(loc, pat):
         if any(ch in pat for ch in "*?["):
@@ -1329,7 +1361,7 @@ def filter_excluded(doc, patterns):
     kept, dropped, dropped_refs = [], 0, set()
     for c in doc.get("components", []):
         locs = [o.get("location", "") for o in (c.get("evidence", {}).get("occurrences") or []) if o.get("location")]
-        if locs and any(loc_match(loc, p) for loc in locs for p in patterns):
+        if c.get("bom-ref") not in keep_refs and locs and any(loc_match(loc, p) for loc in locs for p in patterns):
             dropped += 1
             if c.get("bom-ref"):
                 dropped_refs.add(c["bom-ref"])
@@ -1385,8 +1417,17 @@ def generate_theia_cbom(theia_bin, mode, target, cyclonedx_bin, out):
         sys.stderr.write(f"[warn] cbomkit-theia no output: {r.stderr.strip()[:160]}\n")
         return False
     raw = out + ".raw.json"
+    text = r.stdout
+    try:
+        # cbomkit-theia parsed these from files: say so on each record it did not describe itself. Stamped
+        # on the original input, so evidence restored after the merge includes it.
+        tdoc = json.loads(text)
+        if evmod.stamp_missing(tdoc, "file"):
+            text = json.dumps(tdoc)
+    except ValueError:
+        pass
     with open(raw, "w") as f:
-        f.write(r.stdout)
+        f.write(text)
     if not convert_bom(cyclonedx_bin, raw, out):
         shutil.copy(raw, out)
     try:
@@ -1729,14 +1770,21 @@ def main():
     # --- sanitize (drop null enum fields) + universal overlay + optional redaction ---
     with open(args.out) as f:
         final = strip_nones(json.load(f))
+    # cyclonedx-cli drops occurrence detail and reshapes identity: put each input's evidence back verbatim
+    evmod.restore(final, originals)
+    evmod.normalize(final)
     # A merge can replace metadata.component and drop metadata.lifecycles; the subject and the stage
     # describe what was scanned, so they always come from the runtime builder.
     final.setdefault("metadata", {})["component"] = doc["metadata"]["component"]
+    # cyclonedx-cli turns each input's metadata.component into a component; the subject's bom-ref ("system")
+    # must stay unique (CycloneDX requires unique bom-refs).
+    subj = doc["metadata"]["component"].get("bom-ref")
+    final["components"] = [c for c in final.get("components", []) if c.get("bom-ref") != subj]
     n_levels = undo_merge_defaults(final, originals)
     if n_levels:
         print(f"[ok] removed {n_levels} security level(s) the CBOM merge invented (absent in the original input)")
     final["metadata"]["lifecycles"] = doc["metadata"]["lifecycles"]
-    n_excluded = filter_excluded(final, args.exclude)
+    n_excluded = filter_excluded(final, args.exclude, {c.get("bom-ref") for c in doc.get("components", [])})
     if n_excluded:
         print(f"[ok] --exclude dropped {n_excluded} asset(s) by path filter")
     if not args.no_dep_crypto:
@@ -1749,6 +1797,8 @@ def main():
         if n_fb:
             print(f"[ok] fallback cert parser: recovered {n_fb} modern-OID cert(s) cbomkit-theia dropped "
                   f"(EdDSA/ML-DSA/SLH-DSA)")
+    # FEDLIN's Windows collector reads the certificate stores and SCHANNEL configuration of the host.
+    evmod.stamp_missing(final, "configuration", _is_windows_collector)
     n_stripped = policymod.strip_verdicts(final)
     if n_stripped:
         print(f"[ok] removed {n_stripped} inline verdict propert(ies) from merged input (facts-only CBOM)")
@@ -1759,6 +1809,9 @@ def main():
     for r in args.redact:
         if "=" in r:
             old, new = r.split("=", 1)
+            if old and any(old in m for m in (evmod.PREFIX, "fedlin:", "pkic:profile:")):
+                sys.stderr.write(f"[warn] --redact {old!r} also rewrites the toolkit's own property names and "
+                                 "evidence markers; readers will no longer recognize them\n")
             text = text.replace(old, new)
     if args.redact:
         try:

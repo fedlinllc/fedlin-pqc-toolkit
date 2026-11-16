@@ -121,6 +121,27 @@ OpenSSL (3.5), which does not implement 3DES, RC4 or export suites, so those are
 testssl.sh if you need them checked. `--no-enumerate` skips it, and `--enumerate-pace SECONDS` pauses
 between handshakes for servers that rate-limit (a handshake that times out is recorded as not tested).
 
+## How each record was observed
+
+Every cryptographic record the toolkit writes says how it was found (a key algorithm it could not parse gets
+only a location), as standard CycloneDX 1.6 component
+evidence (`evidence.identity`: a technique and a confidence, plus `evidence.occurrences` for the endpoint):
+
+| How observed | Technique | Confidence |
+|---|---|---|
+| Handshake with the endpoint (its session and certificate), or enumeration probe handshakes | `dynamic-analysis` | 1.0 |
+| System configuration or certificate stores (`sshd -T`, Windows stores and SCHANNEL settings) | `other` | 0.8 |
+| Parsed from a file or container image | `other` | 0.8 |
+| Library in the dependency graph known to provide it (use not confirmed) | `manifest-analysis` | 0.3 |
+| Assumed, not observed | `other` | 0.1 |
+
+The confidence ranks how directly a record was observed; it is not a probability. The values are fixed and
+listed in [STABILITY.md](STABILITY.md). A record seen several ways carries every method, and its confidence
+is the highest. Evidence written by another tool, in a CBOM merged with `--merge-cbom`, is kept verbatim (unless two merged
+inputs use the same bom-ref).
+Evidence is a fact about the record: it does not change verdicts or the score. The report counts records by
+how they were observed.
+
 ## Verdict profiles
 
 Quantum vulnerability is a property of the algorithm and does not change by profile. What changes is
@@ -369,6 +390,14 @@ image on OpenShift; elsewhere it needs `--debug-image`, which you should pin by 
 - PQCA cbomkit-theia.
 - The approach to evidence and prioritization was informed by the published work of LaMarr Labs
   (fieldguide.lamarrlabs.com).
+
+## Feedback and contributions
+
+Feedback is wanted, especially from people running the toolkit against real estates. Open an issue to
+challenge a verdict (with its primary source), report a bug, or say what worked and what did not. Pull
+requests are welcome under the Developer Certificate of Origin; see [CONTRIBUTING.md](CONTRIBUTING.md)
+and the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md). One maintainer answers on a best-effort basis.
 
 ## Commercial support
 

@@ -11,6 +11,31 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-16
+
+### Added
+- How each record was observed: every cryptographic record the toolkit writes carries CycloneDX 1.6
+  component evidence (`evidence.identity`, field `name`: technique and confidence; `evidence.occurrences`:
+  the endpoint, where there is one). One fixed value per source, an ordinal ranking rather than a
+  probability: handshake or enumeration probe 1.0, system configuration or certificate stores 0.8, file or
+  image 0.8, dependency capability 0.3, assumption 0.1 (STABILITY.md). Verdicts and the score do not use it.
+- Report section "How each record was observed" and `summary.json` key `evidence` (records by their
+  strongest source).
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md), a [Code of Conduct](CODE_OF_CONDUCT.md), issue forms
+  (verdict challenge with its primary source, bug report, feedback), a pull request template, and a
+  Developer Certificate of Origin check on every pull request.
+
+### Changed
+- Evidence in a CBOM merged with `--merge-cbom` (and in cbomkit-theia output) is restored verbatim after
+  the merge. cyclonedx-cli drops occurrence detail such as line, offset and symbol, and writes identity in the
+  deprecated single-object form.
+- `--redact` warns when its search text would also rewrite the toolkit's own property names or evidence
+  markers.
+
+### Fixed
+- A merge no longer leaves duplicate `system` components (cyclonedx-cli copied each input's subject into the
+  component list); CycloneDX requires unique bom-refs.
+
 ## [1.0.0] - 2026-11-16
 
 First release under the [stability promise](STABILITY.md) for machine-readable outputs. Earlier releases are
@@ -61,5 +86,6 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.8.0...v1.0.0

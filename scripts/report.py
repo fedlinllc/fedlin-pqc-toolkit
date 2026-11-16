@@ -36,6 +36,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling modules, also under python -I
 import cnsa20_ruleset as cnsa  # HNDL: classify negotiated key exchange
 import cmvp as _cmvp  # FIPS 140-3 (CMVP) candidates from the dated snapshot in data/cmvp/
+import evidence as _ev  # how each CBOM record was observed (CycloneDX component evidence)
 
 PRIORITY_ORDER = {"Critical": 0, "High": 1, "Low": 2, "None": 3, "Review": 4}
 
@@ -912,6 +913,28 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
                  "history. Consider `--exclude` for docs/examples/backup paths on re-scan.*")
         L.append("")
 
+    # ---- how each record was observed (CycloneDX component evidence; facts, not verdicts) ----
+    ev_counts = _ev.summarize(bom, skip=is_secret_hygiene)
+    if ev_counts:
+        L.append("## How each record was observed")
+        L.append("")
+        lead = ("Every cryptographic record in this inventory" if not {"other tool", "not stated"} & set(ev_counts)
+                else "Each record written by this toolkit")
+        L.append(lead + " states how it was found, as CycloneDX component evidence (a technique and a fixed "
+                 "confidence that ranks how directly it was observed, with the endpoint where it applies). A record "
+                 "seen by several methods counts once, under the strongest. Records another tool produced keep that "
+                 "tool's evidence (\"other tool\"); records nobody described are \"not stated\"; a key algorithm the "
+                 "scan could not parse has a location but no identity (\"name not parsed\"). These values do not "
+                 "change verdicts or the score.")
+        L.append("")
+        L.append("| How observed | CycloneDX technique | Confidence | Records |")
+        L.append("|---|---|---|---|")
+        for src in sorted(ev_counts, key=lambda k: -(_ev.SOURCES.get(k, ("", -1))[1])):
+            tech, conf, meaning = _ev.SOURCES.get(src, ("-", None, src))
+            L.append(f"| {meaning[0].upper() + meaning[1:]} | {tech} | "
+                     f"{conf if conf is not None else '-'} | {ev_counts[src]} |")
+        L.append("")
+
     # ---- CBOM inventory appendix (the machine-readable inventory, human-legible) ----
     if not self_serve:
         L.append("## Appendix A: CBOM inventory")
@@ -1048,6 +1071,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
                           "broken_items_accepted": sorted({x.replace("accepts ", "") for r in server_configuration(bom)
                                                            for x in r["broken"]})},
         "classical_fallback": {o: sum(1 for _, x, _ in fb if x == o) for o in dict.fromkeys(x for _, x, _ in fb)},
+        "evidence": _ev.summarize(bom, skip=is_secret_hygiene),
         "cmvp": _cmvp.summary(cmvp_found, cmvp_snap),
         "secret_hygiene_detections": len(secrets),
         "regime": regime,

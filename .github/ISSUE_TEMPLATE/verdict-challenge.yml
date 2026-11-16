@@ -1,0 +1,65 @@
+name: Verdict challenge
+description: The toolkit classifies an algorithm, key size or protocol differently from the standard.
+title: "Verdict: "
+labels: ["verdict"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Verdicts follow primary sources only. A confirmed change bumps the ruleset version and is explained in CORRECTIONS.md.
+        You can check the current verdict with `python3 scripts/verdict_table.py lookup <name> [--bits N] [--profile civilian|nss]`.
+  - type: input
+    id: name
+    attributes:
+      label: Algorithm, parameter set or protocol
+      description: The name exactly as it appears in the CBOM or the lookup.
+      placeholder: e.g. secp384r1, RSA 3072, X25519MLKEM768
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Profile
+      options:
+        - civilian (FIPS 203/204/205 + IR 8547)
+        - nss (CNSA 2.0)
+        - both
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Toolkit and ruleset version
+      description: From `scripts/tier2_pipeline.py --version` and the policy result (`policy.version`).
+      placeholder: e.g. toolkit 1.1.0, ruleset 1.0.3
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current verdict
+      description: Status, target and note the toolkit gives.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected verdict
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Primary source
+      description: Link to the publication (NIST, NSA, IETF or similar) and the section or table, with a short quote.
+    validations:
+      required: true
+  - type: dropdown
+    id: credit
+    attributes:
+      label: Credit in CORRECTIONS.md
+      options:
+        - Credit my GitHub handle
+        - Do not credit me
+    validations:
+      required: true

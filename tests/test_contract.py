@@ -42,7 +42,7 @@ FINDING_KEYS = {"bomRef", "canonical", "cite", "classicalSecurityLevel", "contro
                 "deprecatedAfter", "disallowedAfter", "document", "lane", "name", "nistQuantumSecurityLevel",
                 "note", "priority", "quantumVulnerable", "ruleId", "status", "target"}
 SUMMARY_KEYS = {"algorithms_classified", "awaiting_review", "cbom_timestamp", "certificates",
-                "certs_expiring_90d", "certs_over_lifetime_cap", "cipher_suites", "classical_fallback", "cmvp",
+                "certs_expiring_90d", "certs_over_lifetime_cap", "cipher_suites", "classical_fallback", "cmvp", "evidence",
                 "grade", "hndl_exposures", "kex_unobserved", "lanes", "min_tls", "other_assets", "profile",
                 "public_key_usages_scored", "quantum_resistant", "quantum_vulnerable", "readiness_score", "regime",
                 "secret_hygiene_detections", "system"}
@@ -50,6 +50,11 @@ CLI_FLAGS = {"--version", "--out", "--name", "--repo", "--theia-dir", "--theia-i
              "--cyclonedx", "--validate", "--redact", "--profile", "--subject-tag", "--regime", "--deep",
              "--debug-image", "--kube-cli", "--report", "--merge-cbom", "--exclude", "--no-dep-crypto",
              "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime"}
+EVIDENCE_SOURCES = {  # STABILITY.md "Evidence sources": source -> (technique, confidence)
+    "handshake": ("dynamic-analysis", 1.0), "probe": ("dynamic-analysis", 1.0),
+    "configuration": ("other", 0.8), "file": ("other", 0.8),
+    "dependency": ("manifest-analysis", 0.3), "assumption": ("other", 0.1),
+}
 MCP_TOOLS = {"list_files": set(), "verify_policy": {"cbom", "policy"},
              "summarize": {"cbom", "policy", "profile"}, "pqcmm_evidence": {"cbom", "answers", "profile"},
              "vendor_readiness": {"answers", "profile"}, "lookup_verdict": {"name", "bits", "profile"}}
@@ -103,6 +108,32 @@ class Contract(unittest.TestCase):
         self.assertEqual(POLICY_BLOCK - set(r["policy"]), set())
         self.assertEqual(FINDING_KEYS - set(r["findings"][0]), set())
         self.assertEqual(SUMMARY_KEYS - set(summary), set())
+
+    def test_evidence_sources(self):
+        import evidence
+        for src, (tech, conf) in EVIDENCE_SOURCES.items():
+            self.assertIn(src, evidence.SOURCES)
+            self.assertEqual(evidence.SOURCES[src][:2], (tech, conf), src)
+        # the documented table says the same as the code
+        with open(os.path.join(ROOT, "STABILITY.md"), encoding="utf-8") as f:
+            doc = {m[0]: (m[1], float(m[2])) for m in re.findall(
+                r"^\| `([a-z]+)` \| `([a-z-]+)` \| ([0-9.]+) \|", f.read(), re.M)}
+        self.assertEqual(doc, {k: v[:2] for k, v in evidence.SOURCES.items()})
+        # each promised source has an emission site
+        code = _source("tier2_pipeline.py")
+        for src in EVIDENCE_SOURCES:
+            self.assertIn('"%s"' % src, code, src)
+        with tempfile.TemporaryDirectory() as d:
+            bom = _load(make_outputs(d))
+        stamped = [c for c in bom["components"] if c.get("type") == "cryptographic-asset"
+                   and (c.get("evidence") or {}).get("identity")]
+        self.assertTrue(stamped)
+        for c in stamped:
+            ident = c["evidence"]["identity"]
+            self.assertIsInstance(ident, list)
+            self.assertEqual(ident[0]["field"], "name")
+            for m in ident[0]["methods"]:
+                self.assertTrue(m["value"].startswith("fedlin-pqc-toolkit/"))
 
     def test_cli_flags(self):
         flags = set(re.findall(r'add_argument\("(--[a-z0-9-]+)"', _source("tier2_pipeline.py")))

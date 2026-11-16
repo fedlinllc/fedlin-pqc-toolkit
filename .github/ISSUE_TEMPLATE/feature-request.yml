@@ -1,0 +1,21 @@
+name: Feature request or feedback
+description: Suggest a capability, a collector, or tell us how the toolkit worked for you.
+labels: ["feedback"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What are you trying to do?
+      description: The problem or decision this would help with, and who uses the result.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Suggestion
+      description: What you would like the toolkit to do, or what worked and what did not.
+  - type: textarea
+    id: sources
+    attributes:
+      label: Standards or sources
+      description: Any standard, mandate or specification this relates to.
