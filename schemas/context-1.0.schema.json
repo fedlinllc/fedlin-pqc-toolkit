@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fedlinllc/fedlin-pqc-toolkit/schemas/context-1.0.schema.json",
+  "title": "fedlin.pqc-context 1.0",
+  "description": "Business context for a scan: systems, owners, FIPS 199 impact, data confidentiality lifetime and migration time. Orders attention and flags harvest-now-decrypt-later urgency; never changes a verdict or priority.",
+  "type": "object",
+  "required": ["schema", "schemaVersion", "systems"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "fedlin.pqc-context"},
+    "schemaVersion": {"const": "1.0"},
+    "horizon": {
+      "type": "integer", "minimum": 2000, "maximum": 2100, "default": 2035,
+      "description": "Planning horizon year for the urgency flag. Default 2035 (NIST IR 8547 disallows quantum-vulnerable public-key algorithms after 2035). A policy date, not a forecast."
+    },
+    "systems": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "impact", "endpoints"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "description": "Unique within the file."},
+          "owner": {"type": "string", "minLength": 1},
+          "impact": {"enum": ["low", "moderate", "high"], "description": "FIPS 199 impact level."},
+          "dataLifetimeYears": {"type": "integer", "minimum": 0, "maximum": 100,
+                                "description": "How long data protected by this system must stay confidential."},
+          "migrationYears": {"type": "integer", "minimum": 0, "maximum": 100,
+                             "description": "How long migrating this system to post-quantum cryptography will take. If absent, the urgency flag uses the data lifetime alone and says so."},
+          "endpoints": {
+            "type": "array", "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+            "description": "Patterns: host glob (*.pay.example.gov), host:port, or IP network (10.2.0.0/16, 2001:db8::/32)."
+          }
+        }
+      }
+    }
+  }
+}

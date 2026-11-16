@@ -11,6 +11,18 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-16
+
+### Added
+- Business context (`scripts/context.py`, schema `schemas/context-1.0.schema.json`, `--context` on the pipeline
+  and report): systems with owner, FIPS 199 impact, data confidentiality lifetime, migration time and
+  endpoint patterns. The report adds an attention order (impact times worst finding, with owners) and, for
+  endpoints exposed to harvest-now-decrypt-later recording (including classical key exchange the server
+  accepts), a Mosca urgency flag against a planning horizon (default 2035; a policy date, not a forecast;
+  overridable). Exposure and urgency are never claimed where the scan could not see. Verdicts and priorities
+  are unchanged; a missing migration time is never assumed. The ranking is written as `<out>.attention.json`
+  (`fedlin.pqc-attention` 1.0) and `summary.json` gains `attention`.
+
 ## [1.2.0] - 2026-11-16
 
 ### Added
@@ -109,7 +121,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v0.8.0...v1.0.0

@@ -142,6 +142,47 @@ inputs use the same bom-ref).
 Evidence is a fact about the record: it does not change verdicts or the score. The report counts records by
 how they were observed.
 
+## Business context: attention order and urgency
+
+A context file (`fedlin.pqc-context` 1.0, [schema](schemas/context-1.0.schema.json)) says what the scanned
+endpoints are to the business. It never changes a verdict or a priority; it adds an attention order and an
+urgency flag to the report, and writes the ranking as `<out>.attention.json` (`fedlin.pqc-attention` 1.0):
+
+```json
+{"schema": "fedlin.pqc-context", "schemaVersion": "1.0",
+ "systems": [{"name": "Payments", "owner": "Payments platform", "impact": "high",
+              "dataLifetimeYears": 10, "migrationYears": 2, "endpoints": ["*.pay.example.gov", "10.2.0.0/16"]}]}
+```
+
+```bash
+python3 scripts/tier2_pipeline.py --endpoints ... --context context.json     # or: report.py --cbom ... --context
+python3 scripts/context.py rank --context context.json --cbom cbom.json --json attention.json
+```
+
+- **Attention order:** endpoints ranked by FIPS 199 impact (low, moderate, high) times the severity of their
+  worst finding (Critical, High, Review, Low), with owners; ties go to the worse finding, then the higher impact.
+- **Exposure** to harvest-now-decrypt-later recording is one of: *exposed* (a quantum-vulnerable key exchange
+  negotiated, or classical key exchange accepted from clients that do not offer ML-KEM: a classical group,
+  TLS 1.2 or older, or a classical-only client), *not exposed* (ML-KEM negotiated, and a complete enumeration
+  and the classical-only probe show no classical key exchange accepted), or *undetermined*.
+- **Urgency** (exposed endpoints only) is Mosca's inequality with a planning horizon standing in for the time
+  to a cryptographically relevant quantum computer: urgent when the scan year plus the data's confidentiality
+  lifetime plus the migration time reaches past the horizon. Urgent means the data must stay confidential
+  beyond the date policy retires these algorithms, not that it will be decrypted then. The horizon is a
+  policy date, not a forecast: by default 2035 (civilian: NIST IR 8547 disallows quantum-vulnerable public-key
+  signature and key-establishment schemes after 2035, all of them deprecated after 2030; nss: the NSM-10 goal, with CNSA 2.0 setting
+  earlier dates for several categories). A context file can set its own: high-value assets and high-impact
+  systems (high-impact as defined by NSM-10, which EO 14412 and OMB M-26-15 use) must have post-quantum key
+  establishment by 2030-12-31, so set `"horizon": 2030` where that applies; the horizon is per file, so keep
+  those systems in their own context file. The toolkit does not equate FIPS 199 "high" with that definition.
+- Each matched system is evaluated with its own values and the most urgent result is shown, so no system
+  borrows another's migration time. A system without a migration time is checked on its data lifetime alone
+  and listed (understated, never invented); one without a data lifetime is "not assessed".
+- Patterns: host glob (`*` also crosses dots), `host:port`, IP network, or IP network with port
+  (`10.2.0.0/16:8443`, `[2001:db8::/32]:8443`). IP networks match endpoints scanned by address only. The
+  report lists endpoints with no matching system, systems that matched nothing, and records from another
+  scan run that were not ranked. With `--redact`, the same replacements are applied to the context file.
+
 ## Prove a migration wave
 
 A wave file (`fedlin.pqc-wave` 1.0, [schema](schemas/wave-1.0.schema.json)) states what a migration wave

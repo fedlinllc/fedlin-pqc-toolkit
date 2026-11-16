@@ -29,6 +29,7 @@ import evidence as evmod
 import policy as policymod
 import report as reportmod
 import wave as wavemod
+import context as ctxmod
 
 # Optional private modules (FEDLIN engagement kit). The public toolkit runs without them; their flags
 # are hidden from --help and refused with a clear message when the module is absent.
@@ -49,7 +50,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.2.0"
+TOOLKIT_VERSION = "1.3.0"
 
 
 def run(cmd, timeout=25):
@@ -1552,6 +1553,9 @@ def main():
     ap.add_argument("--baseline", default="",
                     help="CBOM of an earlier scan: with --wave, regressions at the wave's endpoints; in the "
                          "engagement kit, also the continuous-monitoring delta (<out>.delta.md)")
+    ap.add_argument("--context", default="",
+                    help="business context (fedlin.pqc-context 1.0): owners, FIPS 199 impact, data lifetime and "
+                         "migration time; adds an attention order and urgency flag to the report (implies --report)")
     ap.add_argument("--wave", default="",
                     help="wave file (fedlin.pqc-wave 1.0): after the scan, check each declared item against it "
                          "(writes <out>.wave.json and .wave.md; with --baseline, also lists regressions)")
@@ -1626,6 +1630,11 @@ def main():
             sys.stderr.write("[warn] --wave with --no-enumerate or --no-classical-probe: items that need what the "
                              "server accepts, its other certificates or the classical-only probe will be "
                              "\"not observed\"\n")
+    if args.context:
+        try:
+            ctxmod.load_context(args.context, [r.split("=", 1) for r in args.redact if "=" in r])
+        except ctxmod.ContextError as e:
+            bad.append(f"--context: {e}")
     if args.baseline and not os.path.isfile(args.baseline):
         bad.append(f"--baseline {args.baseline}: not a file")
     elif args.baseline and deltamod is None and not args.wave:
@@ -1900,6 +1909,24 @@ def main():
     att_path = out_base + ".attestation.json"
     att_name = os.path.basename(att_path)
     rpt = out_base + ".report.md"
+    attention = None
+    if os.path.exists(out_base + ".attention.json"):
+        os.remove(out_base + ".attention.json")    # never ship a ranking from an earlier run
+    if args.context:
+        args.report = True
+        try:
+            # the CBOM on disk is redacted; apply the same replacements to the context (patterns and names)
+            attention = ctxmod.rank(args.context, args.out, args.profile,
+                                    [r.split("=", 1) for r in args.redact if "=" in r])
+            with open(out_base + ".attention.json", "w") as f:
+                json.dump(attention, f, indent=2)
+            print(f"[ok] context: {len(attention['endpoints'])} endpoint(s) ranked, "
+                  f"{sum(1 for r in attention['endpoints'] if r['urgent'] == 'yes')} urgent, "
+                  f"{len(attention['noContext'])} without context (horizon {attention['horizon']}) "
+                  f"-> {out_base}.attention.json")
+        except Exception as e:   # the scan is done; report without context rather than lose the output
+            sys.stderr.write(f"[warn] --context could not be applied ({e}); the report has no attention order\n")
+            attention = None
     if args.report:
         summ = out_base + ".summary.json"
         try:
@@ -1907,7 +1934,7 @@ def main():
             # actually succeeds (see the --sign block). Fail-closed by construction: nothing on
             # disk ever claims an attestation that does not exist.
             md, summary = reportmod.build_report(view, self_serve=args.self_serve, brand=args.brand,
-                                                 signed=False)
+                                                 signed=False, attention=attention)
             with open(rpt, "w") as f:
                 f.write(md + "\n")
             with open(summ, "w") as f:
@@ -1961,7 +1988,8 @@ def main():
         def _rewrite_report(signed):
             """Re-render the report with/without the attestation claim. Returns True on success."""
             md_, _ = reportmod.build_report(view, self_serve=args.self_serve, brand=args.brand,
-                                            signed=signed, attestation_name=att_name if signed else None)
+                                            signed=signed, attestation_name=att_name if signed else None,
+                                            attention=attention)
             with open(rpt, "w") as f:
                 f.write(md_ + "\n")
             return True
@@ -1972,6 +2000,8 @@ def main():
                 a.append(rpt)
             if args.baseline and os.path.exists(dpath):
                 a.append(dpath)
+            if args.context and os.path.exists(out_base + ".attention.json"):
+                a.append(out_base + ".attention.json")
             if args.wave and os.path.exists(wpath):
                 a += [args.wave, wpath, out_base + ".wave.md"]
             return a

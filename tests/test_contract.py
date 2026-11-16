@@ -42,14 +42,14 @@ FINDING_KEYS = {"bomRef", "canonical", "cite", "classicalSecurityLevel", "contro
                 "deprecatedAfter", "disallowedAfter", "document", "lane", "name", "nistQuantumSecurityLevel",
                 "note", "priority", "quantumVulnerable", "ruleId", "status", "target"}
 SUMMARY_KEYS = {"algorithms_classified", "awaiting_review", "cbom_timestamp", "certificates",
-                "certs_expiring_90d", "certs_over_lifetime_cap", "cipher_suites", "classical_fallback", "cmvp", "evidence",
+                "certs_expiring_90d", "certs_over_lifetime_cap", "cipher_suites", "classical_fallback", "cmvp", "evidence", "attention",
                 "grade", "hndl_exposures", "kex_unobserved", "lanes", "min_tls", "other_assets", "profile",
                 "public_key_usages_scored", "quantum_resistant", "quantum_vulnerable", "readiness_score", "regime",
                 "secret_hygiene_detections", "system"}
 CLI_FLAGS = {"--version", "--out", "--name", "--repo", "--theia-dir", "--theia-image", "--cdxgen", "--theia",
              "--cyclonedx", "--validate", "--redact", "--profile", "--subject-tag", "--regime", "--deep",
              "--debug-image", "--kube-cli", "--report", "--merge-cbom", "--exclude", "--no-dep-crypto",
-             "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime", "--wave"}
+             "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime", "--wave", "--context"}
 EVIDENCE_SOURCES = {  # STABILITY.md "Evidence sources": source -> (technique, confidence)
     "handshake": ("dynamic-analysis", 1.0), "probe": ("dynamic-analysis", 1.0),
     "configuration": ("other", 0.8), "file": ("other", 0.8),
@@ -59,6 +59,11 @@ WAVE_RESULT_KEYS = {"resultFormat", "resultFormatVersion", "evaluationDate", "wa
                     "rulesetDigest", "documents", "passed", "summary", "items", "regressions", "notCompared"}
 WAVE_DOC_KEYS = {"file", "sha256", "serialNumber", "timestamp", "toolkitVersion"}
 WAVE_ITEM_KEYS = {"id", "check", "endpoint", "status", "detail"}
+ATTENTION_KEYS = {"resultFormat", "resultFormatVersion", "profile", "horizon", "horizonSource", "scanYear",
+                  "horizonBeforeScan", "endpoints", "noContext", "notRanked", "unusedSystems",
+                  "missingMigrationTime", "missingDataLifetime"}
+ATTENTION_ROW_KEYS = {"endpoint", "systems", "owners", "impact", "dataLifetimeYears", "migrationYears", "score",
+                      "worstPriority", "findings", "exposure", "exposureReasons", "urgent", "urgency"}
 MCP_TOOLS = {"list_files": set(), "verify_policy": {"cbom", "policy"},
              "summarize": {"cbom", "policy", "profile"}, "pqcmm_evidence": {"cbom", "answers", "profile"},
              "vendor_readiness": {"answers", "profile"}, "lookup_verdict": {"name", "bits", "profile"}}
@@ -154,6 +159,20 @@ class Contract(unittest.TestCase):
             self.assertEqual(WAVE_ITEM_KEYS - set(item), set())
         self.assertEqual(set(wave.CHECKS), {"findings-resolved", "mlkem", "refuses-classical-only",
                                             "certificate-replaced"})
+
+    def test_attention_result(self):
+        import context
+        from test_context import CTX, HOSTS, cbom
+        with tempfile.TemporaryDirectory() as d:
+            c, b = os.path.join(d, "c.json"), os.path.join(d, "b.json")
+            _dump(CTX, c)
+            _dump(cbom(HOSTS), b)
+            att = context.rank(c, b)
+        self.assertEqual(ATTENTION_KEYS - set(att), set())
+        for row in att["endpoints"]:
+            self.assertEqual(ATTENTION_ROW_KEYS - set(row), set())
+            self.assertIn(row["exposure"], ("exposed", "not exposed", "undetermined"))
+            self.assertIn(row["urgent"], ("yes", "no", "not assessed"))
 
     def test_cli_flags(self):
         flags = set(re.findall(r'add_argument\("(--[a-z0-9-]+)"', _source("tier2_pipeline.py")))

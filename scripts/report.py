@@ -495,7 +495,7 @@ def _findings_table(vuln, review, resistant, cap, profile):
     return L
 
 
-def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None):
+def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None, attention=None):
     mp = meta_props(bom)
     sysname = bom.get("metadata", {}).get("component", {}).get("name", "system")
     ts = bom.get("metadata", {}).get("timestamp", "")
@@ -793,6 +793,11 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     else:
         L += _findings_table(vuln=vuln, review=review, resistant=resistant, cap=cap, profile=profile)
 
+    # ---- attention order from business context (scripts/context.py; verdicts unchanged) ----
+    if attention:
+        import context as _context
+        L.extend(_context.markdown(attention).splitlines())
+
     # ---- certificate posture & renewal exposure (the 47-day cert-cliff view) ----
     if cposture["count"]:
         b = cposture["buckets"]
@@ -1072,6 +1077,14 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
                                                            for x in r["broken"]})},
         "classical_fallback": {o: sum(1 for _, x, _ in fb if x == o) for o in dict.fromkeys(x for _, x, _ in fb)},
         "evidence": _ev.summarize(bom, skip=is_secret_hygiene),
+        "attention": None if not attention else {
+            "horizon": attention["horizon"],
+            "urgent": sum(1 for r in attention["endpoints"] if r["urgent"] == "yes"),
+            "notAssessed": sum(1 for r in attention["endpoints"] if r["urgent"] == "not assessed"),
+            "endpoints": len(attention["endpoints"]), "noContext": len(attention["noContext"]),
+            "notRanked": len(attention["notRanked"]), "unusedSystems": attention["unusedSystems"],
+            "missingMigrationTime": attention["missingMigrationTime"],
+            "missingDataLifetime": attention["missingDataLifetime"]},
         "cmvp": _cmvp.summary(cmvp_found, cmvp_snap),
         "secret_hygiene_detections": len(secrets),
         "regime": regime,
@@ -1156,6 +1169,8 @@ def main():
     ap.add_argument("--out", default="", help="output Markdown report (default: <cbom>.report.md)")
     ap.add_argument("--html", default="", help="also write an HTML version (for Drive upload with clean tables)")
     ap.add_argument("--json", default="", help="optional machine-readable summary JSON")
+    ap.add_argument("--context", default="",
+                    help="business context (fedlin.pqc-context 1.0): attention order and urgency in the report")
     ap.add_argument("--self-serve", action="store_true",
                     help="gated automated-scan variant (disclaimer, confidence bands, roadmap withheld)")
     ap.add_argument("--brand", default="FEDLIN", help="white-label the deliverable under a reseller's name")
@@ -1208,9 +1223,26 @@ def main():
         sys.stderr.write(f"[error] {e}. The CBOM changed after its policy result was written; re-run the "
                          "policy stage (python3 policy.py evaluate --cbom ...) or the pipeline.\n")
         sys.exit(1)
+    attention = None
+    if args.context:
+        import context as _context
+        # rank under the profile the report's verdicts came from (the policy result's), not a default
+        pol = args.policy or (args.cbom.rsplit(".", 1)[0] + ".policy.json")
+        prof = args.profile
+        if not prof and os.path.exists(pol):
+            try:
+                with open(pol) as f:
+                    prof = (json.load(f).get("policy") or {}).get("profile")
+            except (OSError, ValueError):
+                prof = None
+        try:
+            attention = _context.rank(args.context, args.cbom, prof or "civilian")
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
+            sys.stderr.write(f"[error] --context: {e}\n")
+            sys.exit(2)
     md, summary = build_report(bom, self_serve=args.self_serve, brand=args.brand,
                                signed=signed,
-                               attestation_name=args.attestation_name or None)
+                               attestation_name=args.attestation_name or None, attention=attention)
     with open(out, "w") as f:
         f.write(md + "\n")
     print(f"[ok] report: {out}: score {summary['readiness_score']} ({summary['grade']}), "
