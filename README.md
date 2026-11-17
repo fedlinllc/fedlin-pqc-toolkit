@@ -18,6 +18,21 @@ what cryptography they run and how they plan to migrate it.
 
 What each mode can read is set out under [Access by mode](#access-by-mode).
 
+## Project status
+
+This toolkit is a living project, built and maintained by one person at FEDLIN and changed often. What
+that means for you:
+
+- **Verdicts can change.** Each one comes from a versioned ruleset, and the ruleset version is written
+  into every result. When a verdict changes, the reason and the primary source are logged in
+  [CORRECTIONS.md](CORRECTIONS.md).
+- **Output formats stay stable.** The machine-readable outputs follow semantic versioning and the
+  promises in [STABILITY.md](STABILITY.md), so your tooling won't break between minor releases.
+- **There are gaps.** [Known limits](#known-limits) lists what the toolkit does not yet see or judge.
+  Security fixes are published as GitHub security advisories.
+- **Challenges are welcome.** If a verdict looks wrong, open a *Verdict challenge* issue. Bug reports,
+  ideas and contributions go through [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## What has been validated, and how
 
 Every input below exists in the code. This table says how far each one has been exercised outside unit
@@ -69,9 +84,9 @@ Or use the published container image, with nothing to install (pin it by the dig
 ```bash
 mkdir -p out
 podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 \
   --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
-# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 ...
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 ...
 ```
 
 ## Verify a release
@@ -81,15 +96,15 @@ and every file and the image carry Sigstore-signed SLSA build provenance that na
 (releases before 1.0.0 are tags only):
 
 ```bash
-gh attestation verify fedlin-pqc-toolkit-1.0.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
-gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify fedlin-pqc-toolkit-1.4.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 --repo fedlinllc/fedlin-pqc-toolkit
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
 Each release also carries an SBOM of the toolkit (`*.sbom.cdx.json`), the provenance bundle
 (`*.intoto.jsonl`) and the verdict table (`verdicts.json`). These signatures use classical algorithms,
 because Sigstore does not yet support post-quantum signatures; a post-quantum (SLH-DSA, FIPS 205)
-release ledger is planned for 1.1.
+release ledger is planned.
 
 ## What an endpoint scan records
 
@@ -101,8 +116,8 @@ key-exchange group, certificate), and then enumerates what the server **accepts*
 - the cipher suites of each version (TLS 1.3 suites one by one; for TLS 1.0 to 1.2 the client offers all
   suites and removes each one the server picks until it refuses, up to 40 per version; a list cut short by
   a timeout is marked partial);
-- the key-exchange groups in the probe list: hybrid and pure ML-KEM, X25519, X448, NIST curves and FFDHE,
-  in TLS 1.3 and (for classical groups) TLS 1.2. A group counts as accepted only when the server negotiated
+- the key-exchange groups in the probe list: hybrid and pure ML-KEM, X25519, X448, NIST curves, brainpool
+  curves and FFDHE, in TLS 1.3 and (for classical groups) TLS 1.2. A group counts as accepted only when the server negotiated
   that group, and as refused only when the server sent a refusal alert; Diffie-Hellman group sizes are
   recorded too;
 - one certificate per signature-scheme family (RSA, ECDSA, EdDSA, ML-DSA), so a server that presents an
@@ -115,6 +130,14 @@ exposures and static-RSA suites as lacking forward secrecy. They do not change t
 endpoint serves, including additional ones found by enumeration, are certificates in use and are scored.
 An endpoint the host OpenSSL cannot reach (for example a FIPS-mode host and a TLS 1.0-only server) is
 captured with the enumeration client instead of being dropped.
+
+A server can send any text after the handshake, and OpenSSL prints it. The scan reads only what OpenSSL
+printed about the handshake itself, up to the end of its connection summary, and only from lines OpenSSL
+starts. A key-exchange group must be a known group name; anything else is recorded as `unparsed-kex-group`
+(Manual review). An ML-KEM group counts only when the same handshake negotiated TLS 1.3, and is not recorded
+when enumeration found that the server refuses it (`fedlin:kexConflict` says so; a load balancer whose backends
+differ can cause it). Such a key exchange counts as not observed: the report is marked Incomplete and lists the
+endpoint, and a wave check of the key-establishment lane or of `mlkem` there is "not observed".
 
 Enumeration takes about 10 to 20 seconds per endpoint (endpoints run in parallel) and uses the probe
 OpenSSL (3.5), which does not implement 3DES, RC4 or export suites, so those are not tested; use
@@ -277,7 +300,7 @@ agent read-only tools over toolkit outputs in one folder you choose:
 python3 scripts/mcp_server.py --root ./out            # register this command in your MCP client
 # or from the image, with no network and the folder read-only:
 podman run -i --rm --network none -v "$PWD/out:/data:ro,Z" --entrypoint python3 \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.0.0 scripts/mcp_server.py --root /data
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 scripts/mcp_server.py --root /data
 ```
 
 The boundary is deliberate. **It never scans and makes no network connections**: you run scans yourself
@@ -324,15 +347,21 @@ grade.
 
 The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. Each endpoint
 whose certificate was captured is then contacted a second time by a client offering only classical
-key-exchange groups, with TLS 1.2 permitted through the client's default cipher list (on RHEL hosts,
+key-exchange groups: every classical TLS 1.3 group OpenSSL 3.5 implements (X25519, X448, the NIST and
+brainpool curves, FFDHE 2048 to 8192), the TLS 1.2 brainpool curves, and the legacy TLS 1.2 curves the probe
+OpenSSL 3.5.9 accepts (secp224r1, secp224k1, secp256k1, secp192r1, secp192k1, secp160r1, secp160k1,
+secp160r2, sect163r1, sect193r1, sect193r2, sect239k1; a curve below the client's security level is not sent).
+A FIPS-mode client offers the NIST curves (P-224 included) and FFDHE. An older OpenSSL that lacks some of the
+names (3.0 and 3.1 have no brainpool TLS 1.3 groups) offers the rest, and the CBOM lists what it could not
+offer in `fedlin:classicalOnlyOfferReduced`. TLS 1.2 is permitted through the client's default cipher list (on RHEL hosts,
 crypto-policies exclude static-RSA suites, so those are not covered). The CBOM records the outcome as
 `fedlin:classicalOnlyOffer`:
 
 - **accepted:** the server chose classical parameters (the handshake completed, or the server sent its
   certificate before failing for another reason).
 - **rejected:** the server refused with a handshake-failure or insufficient-security alert.
-- **inconclusive:** the handshake failed for any other reason (reset, HTTP on the port), or a FIPS-mode
-  client, which cannot offer X25519 or X448, was refused.
+- **inconclusive:** the handshake failed for any other reason (reset, HTTP on the port), or a client with a
+  reduced offer (FIPS mode, or an older OpenSSL) was refused: the server may accept a group it did not offer.
 - **untested:** no connection on the second attempt.
 
 The CBOM also records what was negotiated and the client tool, version and command as run. The report
@@ -430,8 +459,6 @@ Stated so a result is not read as more than it is:
 - Not yet covered: IPsec/VPN, Kerberos, code signing, cloud KMS, database encryption at rest.
 - Windows AD CS template verdicts have been checked by logic inspection; a full Windows CBOM has not yet
   been run end to end through the policy stage.
-- The hosted quick check on fedlin.com does not yet read the verdict table, so its verdicts can differ
-  from a toolkit run until it does.
 - CycloneDX 1.6 output is read as a legacy carrier by the PKIC validator; CycloneDX 2.0 export follows
   the 2.0 release.
 - The PKI Consortium CBOM profiles are working-group drafts (`pkic.example` identifiers). "Conforms" means

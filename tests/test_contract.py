@@ -26,6 +26,7 @@ CBOM_PROPERTIES = {
     "fedlin:hndl_exposure", "fedlin:host", "fedlin:hsm_indicators", "fedlin:hw_action",
     "fedlin:hw_action_detail", "fedlin:hw_class", "fedlin:hw_fips_status", "fedlin:hw_pqc_capable",
     "fedlin:hw_pqc_gate", "fedlin:hw_vendor", "fedlin:kex_partial_evidence", "fedlin:kex_probe",
+    "fedlin:kexConflict",
     "fedlin:kube_version", "fedlin:min_tls", "fedlin:mode", "fedlin:ocp_version", "fedlin:openssl_version",
     "fedlin:os_id", "fedlin:os_version_id", "fedlin:registry_family", "fedlin:registry_name",
     "fedlin:sealed_secret_crs", "fedlin:source", "fedlin:tls_ciphers",
@@ -106,6 +107,20 @@ class Contract(unittest.TestCase):
         self.assertEqual(CBOM_PROPERTIES - written, set())
         self.assertIn('f"fedlin:acceptedCipherSuites:{v}"', src)  # one property per protocol version
         self.assertEqual(PKIC_PROPERTIES - written, set())
+
+    def test_placeholder_names(self):
+        # STABILITY.md promises these spellings for what a scan observed but could not read, and their lanes.
+        import cnsa20_ruleset
+        self.assertEqual(cnsa20_ruleset.PLACEHOLDER_LANES, {"unparsed-kex-group": "key-establishment",
+                                                           "unparsed-public-key-algorithm": "public-key"})
+        with open(os.path.join(ROOT, "STABILITY.md"), encoding="utf-8") as f:
+            text = f.read()
+        for name in cnsa20_ruleset.PLACEHOLDER_LANES:
+            self.assertIn(f"`{name}`", text)
+        with open(os.path.join(ROOT, "scripts", "tier2_pipeline.py"), encoding="utf-8") as f:
+            pipeline = f.read()
+        for name in cnsa20_ruleset.PLACEHOLDER_LANES:
+            self.assertIn(f'"{name}"', pipeline)
 
     def test_policy_result_and_summary(self):
         with tempfile.TemporaryDirectory() as d:

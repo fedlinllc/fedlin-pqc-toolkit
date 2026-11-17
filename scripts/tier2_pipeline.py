@@ -50,7 +50,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.3.0"
+TOOLKIT_VERSION = "1.4.0"
 
 
 def run(cmd, timeout=25):
@@ -142,18 +142,44 @@ def _hp(host, port):
     return shlex.quote(f"{host}:{int(port)}"), shlex.quote(host)
 
 
+# s_client prints its handshake summary ("New, <version>, Cipher is <suite>" through the next "---" line) before
+# it reads any application data, and everything it prints after that summary can be bytes the server chose to send
+# (GHSA-62fw-vjj2-r4p2). Output is parsed only up to the end of that summary, and only from lines s_client itself
+# starts (anchored matches), so a server cannot forge a key-exchange group, protocol, cipher or certificate.
+_SUMMARY_START = re.compile(r"^(?:New|Reused), (?:TLSv[\d.]+|SSLv\d|\(NONE\)), Cipher is ", re.M)
+_SUMMARY_END = re.compile(r"^---$", re.M)
+# The same cut for shell pipelines (enumeration, certificate and chain capture): print up to the end of the summary.
+_HS_CUT = "awk '{print} /^(New|Reused), /{s=1} s && /^---$/{exit}'"
+
+
+def _handshake_part(out):
+    """The part of s_client output that s_client wrote about the handshake; anything after it is dropped."""
+    out = out or ""
+    m = _SUMMARY_START.search(out)
+    if not m:
+        return out  # no summary: the handshake did not complete, so the server could send no application data
+    end = _SUMMARY_END.search(out, m.end())
+    return out[:end.end()] if end else out
+
+
+_CIPHER_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
 def _parse_session(out):
-    """Negotiated protocol version and cipher suite from openssl s_client output."""
+    """Negotiated protocol version and cipher suite from openssl s_client output (handshake part only)."""
+    out = _handshake_part(out)
     proto = cipher = None
-    m = re.search(r"New,\s*(TLSv[\d.]+|SSLv\d),\s*Cipher is\s*(\S+)", out)
+    m = re.search(r"^New, (TLSv[\d.]+|SSLv\d), Cipher is (\S+)$", out, re.M)
     if m:
         proto, cipher = m.group(1), m.group(2)
-    m = re.search(r"^\s*Protocol\s*:\s*(TLSv[\d.]+|SSLv\d)", out, re.M)
+    m = re.search(r"^\s*Protocol\s*:\s*(TLSv[\d.]+|SSLv\d)\s*$", out, re.M)
     if m:
         proto = m.group(1)
-    m = re.search(r"^\s*Cipher\s*:\s*(\S+)", out, re.M)
+    m = re.search(r"^\s*Cipher\s*:\s*(\S+)\s*$", out, re.M)
     if m and m.group(1) not in ("0000", "(NONE)"):
         cipher = m.group(1)
+    if cipher and not _CIPHER_NAME.fullmatch(cipher):
+        cipher = None
     return proto, cipher
 
 
@@ -163,19 +189,70 @@ _KEX_GROUPS_FIPS = "SecP256r1MLKEM768:SecP384r1MLKEM1024:secp256r1:secp384r1:sec
 _PQC_HYBRIDS = ("x25519mlkem768", "secp256r1mlkem768", "secp384r1mlkem1024", "mlkem")
 
 
+# Key-exchange group names s_client prints (Negotiated TLS1.3 group, or the Temp Key curve or algorithm), lowercase.
+# A group name outside this list, or not in a strict charset, is recorded as UNPARSED_GROUP (Manual review), never
+# as a name that carries a verdict.
+KNOWN_GROUPS = frozenset(x.lower() for x in (
+    "X25519MLKEM768", "SecP256r1MLKEM768", "SecP384r1MLKEM1024", "MLKEM512", "MLKEM768", "MLKEM1024",
+    "X25519", "X448", "secp256r1", "prime256v1", "secp384r1", "secp521r1",
+    "brainpoolP256r1", "brainpoolP384r1", "brainpoolP512r1",
+    "brainpoolP256r1tls13", "brainpoolP384r1tls13", "brainpoolP512r1tls13",
+    "ffdhe2048", "ffdhe3072", "ffdhe4096", "ffdhe6144", "ffdhe8192", "DH",
+    # legacy TLS 1.2 curves (OpenSSL 3.5 still negotiates them when offered)
+    "secp160k1", "secp160r1", "secp160r2", "secp192k1", "secp192r1", "prime192v1", "secp224k1", "secp224r1",
+    "secp256k1", "sect163k1", "sect163r1", "sect163r2", "sect193r1", "sect193r2", "sect233k1", "sect233r1",
+    "sect239k1", "sect283k1", "sect283r1", "sect409k1", "sect409r1", "sect571k1", "sect571r1"))
+UNPARSED_GROUP = "unparsed-kex-group"
+_GROUP_NAME = re.compile(r"[A-Za-z0-9_-]{1,40}")
+_TEMP_KEY = re.compile(r"([A-Za-z0-9_-]{1,40})(?:, ([A-Za-z0-9_-]{1,40}))?, (\d{1,5}) bits")
+
+
 def _parse_kex_group(out):
-    """Key-exchange group from openssl s_client output (OpenSSL 3.0 to 3.5 formats)."""
-    m = re.search(r"Negotiated TLS1\.3 group:\s*([A-Za-z0-9_]+)", out)
-    if m and m.group(1) != "NULL":
-        return m.group(1)
-    # "Peer Temp Key: ECDH, prime256v1, 256 bits" / "Server Temp Key: X25519, 253 bits"
-    m = re.search(r"(?:Peer|Server) Temp Key:\s*([^,\n]+)(?:,\s*([A-Za-z0-9_-]+))?", out)
-    if m:
-        first, second = m.group(1).strip(), (m.group(2) or "").strip()
-        if first.upper() in ("ECDH", "DH") and second and not second.isdigit():
-            return second
-        return first
-    return None
+    """Key-exchange group from openssl s_client output (OpenSSL 3.0 to 3.5 formats), handshake part only.
+
+    None: no group line (no handshake, or a key exchange with no group such as static RSA). UNPARSED_GROUP: a group
+    line whose value is not a known group name. An ML-KEM group counts only when the same handshake negotiated
+    TLS 1.3 (TLS 1.2 has no ML-KEM key exchange)."""
+    hs = _handshake_part(out)
+    name = None
+    m = re.search(r"^Negotiated TLS1\.3 group: (.*)$", hs, re.M)
+    if m and m.group(1).strip() not in ("", "<NULL>", "NULL"):
+        name = m.group(1).strip()
+    else:
+        # "Peer Temp Key: ECDH, prime256v1, 256 bits" / "Server Temp Key: X25519, 253 bits" / "DH, 2048 bits"
+        m = re.search(r"^(?:Peer|Server) Temp Key: (.*)$", hs, re.M)
+        if not m:
+            return None
+        t = _TEMP_KEY.fullmatch(m.group(1).strip())
+        if not t:
+            return UNPARSED_GROUP
+        first, second = t.group(1), t.group(2)
+        name = second if first.upper() == "ECDH" and second else first
+    if not _GROUP_NAME.fullmatch(name) or name.lower() not in KNOWN_GROUPS:
+        return UNPARSED_GROUP
+    if _is_pqc_group(name) and _parse_session(hs)[0] != "TLSv1.3":
+        return UNPARSED_GROUP
+    return name
+
+
+def _temp_key_bits(out):
+    """Bits on the Temp Key line of the handshake part, or None."""
+    m = re.search(r"^(?:Peer|Server) Temp Key: (.*)$", _handshake_part(out), re.M)
+    t = _TEMP_KEY.fullmatch(m.group(1).strip()) if m else None
+    return int(t.group(3)) if t else None
+
+
+def _check_mlkem_claim(group, enumeration):
+    """(group, note): an ML-KEM group from one handshake is not recorded when the enumeration ran and found the
+    server refuses that group (the two observations contradict each other); the key exchange is then unknown."""
+    en = enumeration or {}
+    if not _is_pqc_group(group) or en.get("status") != "complete":
+        return group, None
+    state = next((ok for g, ok in (en.get("groups") or {}).items() if g.lower() == group.lower()), None)
+    if state is False:
+        return UNPARSED_GROUP, (f"a handshake reported {group}, but the enumeration found that the server refuses "
+                                f"it; the key exchange is not recorded as ML-KEM")
+    return group, None
 
 
 def _is_pqc_group(g):
@@ -236,13 +313,13 @@ def _probe_kex_group(host, port=443):
     """
     hp, h = _hp(host, port)
     base = f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} -groups "
-    out = run(base + _KEX_GROUPS + " 2>&1")
+    out = _handshake_part(run(base + _KEX_GROUPS + " 2>&1"))
     if "SSL_CONF_cmd" not in out:
         return _parse_kex_group(out), "host", True
     probe = os.environ.get("FEDLIN_KEX_PROBE_OPENSSL", "")
     if probe and os.path.isfile(probe) and os.access(probe, os.X_OK):
-        pout = run(f"echo | timeout 8 {shlex.quote(probe)} s_client -connect {hp} -servername {h} "
-                   f"-groups {_KEX_GROUPS} 2>&1")
+        pout = _handshake_part(run(f"echo | timeout 8 {shlex.quote(probe)} s_client -connect {hp} -servername {h} "
+                                   f"-groups {_KEX_GROUPS} 2>&1"))
         grp = None if "SSL_CONF_cmd" in pout else _parse_kex_group(pout)
         if grp:
             return grp, "bundled", True
@@ -257,9 +334,32 @@ def _probe_kex_group(host, port=443):
 
 # Classical-only client for the zero-legacy test (PKI Consortium PQCMM 4.3.1): every group offered is
 # classical and TLS 1.2 (which has no PQC key exchange) is allowed, so a completed handshake means the server
-# still accepts a key exchange that is not quantum-resistant. One handshake covers both versions.
-_CLASSICAL_GROUPS = "X25519:secp256r1:secp384r1:secp521r1:X448:ffdhe2048:ffdhe3072"
-_CLASSICAL_GROUPS_FIPS = "secp256r1:secp384r1:secp521r1:ffdhe2048:ffdhe3072"
+# still accepts a key exchange that is not quantum-resistant. One handshake covers both versions. The offer is
+# every classical TLS 1.3 group OpenSSL 3.5 implements (`openssl list -tls-groups`), the TLS 1.2 brainpool
+# codepoints and every legacy TLS 1.2 curve the probe OpenSSL 3.5.9 accepts in a group list (checked one by one;
+# it rejects sect163k1, sect233*, sect283*, sect409* and sect571*): a server that accepts only one of them must
+# not pass as refusing classical key exchange. Curves below the client's security level are not sent.
+_CLASSICAL_GROUPS = ("X25519:secp256r1:secp384r1:secp521r1:X448:brainpoolP256r1tls13:brainpoolP384r1tls13:"
+                     "brainpoolP512r1tls13:brainpoolP256r1:brainpoolP384r1:brainpoolP512r1:"
+                     "ffdhe2048:ffdhe3072:ffdhe4096:ffdhe6144:ffdhe8192:"
+                     "secp224r1:secp224k1:secp256k1:secp192r1:secp192k1:secp160r1:secp160k1:secp160r2:"
+                     "sect163r1:sect193r1:sect193r2:sect239k1")
+# A FIPS-mode OpenSSL accepts the brainpool names but cannot compute those keys (the handshake then fails on the
+# client side), so its reduced offer leaves them out; a rejection from it is never read as a refusal anyway.
+_CLASSICAL_GROUPS_FIPS = ("secp256r1:secp384r1:secp521r1:secp224r1:ffdhe2048:ffdhe3072:ffdhe4096:ffdhe6144:"
+                          "ffdhe8192")
+_GROUP_SUPPORT = {}  # (binary, group list) -> the names in it that binary accepts
+
+
+def _accepted_groups(binary, groups):
+    """The names in a group list this OpenSSL accepts. OpenSSL rejects a whole -groups list for one name it does not
+    know (3.0 and 3.1 have no brainpool*tls13), so each name is tried alone, once per run, against a closed port."""
+    key = (binary, groups)
+    if key not in _GROUP_SUPPORT:
+        _GROUP_SUPPORT[key] = ":".join(
+            g for g in groups.split(":")
+            if "SSL_CONF_cmd" not in run(f"echo | timeout 3 {binary} s_client -connect 127.0.0.1:9 -groups {g} 2>&1"))
+    return _GROUP_SUPPORT[key]
 
 
 # Alerts that mean the server refused the offered parameters: handshake_failure (40) and
@@ -278,6 +378,7 @@ def _classical_result(out):
     server answered with handshake_failure or insufficient_security before sending a certificate.
     inconclusive: connected, but the handshake failed for another reason. None: no TCP connection.
     """
+    out = _handshake_part(out)
     proto, cipher = _parse_session(out)
     if cipher:
         return "accepted", proto, cipher, _parse_kex_group(out)
@@ -297,9 +398,11 @@ def _probe_classical_only(host, port=443):
     """Offer only classical key exchange and record whether the server accepts it.
 
     Facts only: outcome (accepted / rejected / inconclusive / untested), what was negotiated, the client tool
-    and version, and the command as run. Same client order as _probe_kex_group. A FIPS-mode client cannot
-    offer X25519 or X448, so a rejection from that reduced offer is 'inconclusive' (the server may accept
-    X25519); an acceptance from it is still an acceptance. A client that ran but got no TCP connection ends
+    and version, and the command as run. Same client order as _probe_kex_group. A client whose OpenSSL
+    lacks some names (3.0 and 3.1: the brainpool TLS 1.3 groups) offers the rest, X25519 and X448 included, after
+    the bundled and container clients; a FIPS-mode client cannot offer X25519 or X448 and uses its own subset. A
+    rejection from any reduced offer is 'inconclusive' (the server may accept a group not offered; the names are
+    recorded); an acceptance from it is still an acceptance. A client that ran but got no TCP connection ends
     the probe as 'untested' rather than trying the next client.
     """
     hp, h = _hp(host, port)
@@ -307,33 +410,41 @@ def _probe_classical_only(host, port=443):
     def s_client(binary, groups):
         return f"echo | timeout 8 {binary} s_client -connect {hp} -servername {h} -groups {groups}"
 
-    def result(out, tool, cmd, complete):
+    def result(out, tool, cmd, complete, missing=None):
         outcome, proto, cipher, grp = _classical_result(out)
         outcome = outcome or "untested"
         if outcome == "rejected" and not complete:
             outcome = "inconclusive"
-        return {"outcome": outcome, "protocol": proto, "cipher": cipher, "group": grp,
-                "tool": tool or "openssl (version not reported)", "command": cmd, "offer_complete": complete}
+        r = {"outcome": outcome, "protocol": proto, "cipher": cipher, "group": grp,
+             "tool": tool or "openssl (version not reported)", "command": cmd, "offer_complete": complete}
+        if missing:
+            r["not_offered"] = missing
+        return r
 
     cmd = s_client("openssl", _CLASSICAL_GROUPS)
-    out = run(cmd + " 2>&1")
+    out = _handshake_part(run(cmd + " 2>&1"))
     if "SSL_CONF_cmd" not in out:
         return result(out, run("openssl version"), cmd, True)
     probe = os.environ.get("FEDLIN_KEX_PROBE_OPENSSL", "")
     if probe and os.path.isfile(probe) and os.access(probe, os.X_OK):
         q = shlex.quote(probe)
         cmd = s_client(q, _CLASSICAL_GROUPS)
-        pout = run(cmd + " 2>&1")
+        pout = _handshake_part(run(cmd + " 2>&1"))
         if pout and "SSL_CONF_cmd" not in pout:
             return result(pout, run(f"{q} version"), cmd, True)
     img = os.environ.get("FEDLIN_KEX_PROBE_IMAGE", "") or _default_probe_image()
     if img:
-        cout = _container_s_client(host, port, img, _CLASSICAL_GROUPS, version=True)
+        cout = _handshake_part(_container_s_client(host, port, img, _CLASSICAL_GROUPS, version=True))
         m = re.search(r"^TOOL: (.+)$", cout, re.M)
         if m:  # the container ran its OpenSSL; whatever it saw is the answer
             inner = s_client("openssl", _CLASSICAL_GROUPS) + " 2>&1"
             return result(cout, m.group(1).strip(), f"podman run --rm --pull=never {img} sh -c "
                           + shlex.quote(inner), True)
+    known = _accepted_groups("openssl", _CLASSICAL_GROUPS).split(":")
+    if "X25519" in known:  # an older OpenSSL, not in FIPS mode: offer the names it has
+        missing = [g for g in _CLASSICAL_GROUPS.split(":") if g not in known]
+        cmd = s_client("openssl", ":".join(known))
+        return result(_handshake_part(run(cmd + " 2>&1")), run("openssl version"), cmd, False, missing)
     cmd = s_client("openssl", _CLASSICAL_GROUPS_FIPS)
     return result(run(cmd + " 2>&1"), run("openssl version"), cmd, False)
 
@@ -346,8 +457,20 @@ _ENUM_VERSIONS = (("TLSv1", "-tls1"), ("TLSv1.1", "-tls1_1"), ("TLSv1.2", "-tls1
 _ENUM_TLS13_SUITES = ("TLS_AES_256_GCM_SHA384", "TLS_AES_128_GCM_SHA256", "TLS_CHACHA20_POLY1305_SHA256",
                       "TLS_AES_128_CCM_SHA256", "TLS_AES_128_CCM_8_SHA256")
 _ENUM_GROUPS = ("X25519MLKEM768", "SecP256r1MLKEM768", "SecP384r1MLKEM1024", "MLKEM512", "MLKEM768", "MLKEM1024",
-                "X25519", "X448", "secp256r1", "secp384r1", "secp521r1", "ffdhe2048", "ffdhe3072", "ffdhe4096",
-                "ffdhe6144", "ffdhe8192")
+                "X25519", "X448", "secp256r1", "secp384r1", "secp521r1", "brainpoolP256r1tls13",
+                "brainpoolP384r1tls13", "brainpoolP512r1tls13", "brainpoolP256r1", "brainpoolP384r1",
+                "brainpoolP512r1", "ffdhe2048", "ffdhe3072", "ffdhe4096", "ffdhe6144", "ffdhe8192")
+
+
+def _enum_versions(g):
+    """Protocol versions a group is offered in: ML-KEM and the *tls13 brainpool codepoints exist only in TLS 1.3,
+    the plain brainpool codepoints only in TLS 1.2; the other classical groups in both (ECDHE / RFC 7919 DHE)."""
+    low = g.lower()
+    if "mlkem" in low or low.endswith("tls13"):
+        return ("13",)
+    if low.startswith("brainpool"):
+        return ("12",)
+    return ("13", "12")
 _ENUM_SIGALGS = (("RSA", "rsa_pss_rsae_sha256:rsa_pss_rsae_sha384:rsa_pss_rsae_sha512:rsa_pkcs1_sha256:"
                          "rsa_pkcs1_sha384:rsa_pkcs1_sha512:rsa_pss_pss_sha256"),
                  ("ECDSA", "ecdsa_secp256r1_sha256:ecdsa_secp384r1_sha384:ecdsa_secp521r1_sha512"),
@@ -367,9 +490,11 @@ def _enum_script(binary, hp, sni, pace=0.0):
     """POSIX sh that runs every enumeration handshake against one endpoint with one OpenSSL binary and prints
     tagged lines only (no certificate bodies, no private data). Each handshake has its own 6 s timeout."""
     o = f"timeout 6 {binary} s_client -connect {hp} -servername {sni}"
-    keep = ("grep -E '^(CONNECTED|New, |Negotiated TLS1.3 group|Peer Temp Key|Server Temp Key)|"
+    # Only the handshake part of each output (_HS_CUT), so nothing the server sends as data is kept.
+    keep = (_HS_CUT + " | grep -E '^(CONNECTED|New, |Negotiated TLS1.3 group|Peer Temp Key|Server Temp Key)|"
             "^ *Protocol *:|alert|:error:'")
-    cert = (f"{binary} x509 -noout -subject -issuer -dates -fingerprint -sha256 -text 2>/dev/null | grep -E "
+    cert = (f"{_HS_CUT} | {binary} x509 -noout -subject -issuer -dates -fingerprint -sha256 -text 2>/dev/null "
+            f"| grep -E "
             f"\"^(subject=|issuer=|notBefore=|notAfter=|sha256 Fingerprint=|SHA256 Fingerprint=)|"
             f"Public Key Algorithm:|Public-Key:|Signature Algorithm:\" | head -12")
     L = [f'echo "TOOL $({binary} version)"',
@@ -388,11 +513,12 @@ def _enum_script(binary, hp, sni, pace=0.0):
                  f'echo "=== ITER {name} $c"; printf "%s\\n" "$out" | {keep}; '
                  f'list="$list:-$c"; n=$((n+1)); done; '
                  f'if [ $n -ge {_ENUM_MAX_SUITES} ]; then echo "=== TRUNCATED {name}"; '
-                 f'elif [ $n -gt 0 ] && ! printf "%s\\n" "$out" | grep -q "SSL alert number"; then '
+                 f'elif [ $n -gt 0 ] && ! printf "%s\\n" "$out" | {_HS_CUT} | grep -q "SSL alert number"; then '
                  f'echo "=== INCOMPLETE {name}"; fi')
     for g in _ENUM_GROUPS:
-        L.append(f'echo "=== GROUP13 {g}"; echo | {o} -tls1_3 -groups {g} 2>&1 | {keep}')
-        if "mlkem" not in g.lower():  # classical groups are also offered in TLS 1.2 (ECDHE / RFC 7919 DHE)
+        if "13" in _enum_versions(g):
+            L.append(f'echo "=== GROUP13 {g}"; echo | {o} -tls1_3 -groups {g} 2>&1 | {keep}')
+        if "12" in _enum_versions(g):
             L.append(f'echo "=== GROUP12 {g}"; echo | {o} -tls1_2 -cipher {_LEGACY} -groups {g} 2>&1 | {keep}')
     # Certificate probes keep the server's alerts too, so a probe with no answer is told apart from a refusal.
     for label, algs in _ENUM_SIGALGS:
@@ -463,6 +589,10 @@ def _parse_enum(out):
             got = _parse_kex_group(t)
             if _parse_session(t)[1]:
                 same = got and (got.lower() == g.lower() or g.lower() in _GROUP_ALIASES.get(got.lower(), ()))
+                # TLS 1.3 negotiates finite-field DH only as a named group: "DH, 4096 bits" offered ffdhe4096 alone
+                # is that group (TLS 1.2 DHE uses parameters the server picks, so it proves nothing there).
+                same = same or (k.startswith("GROUP13 ") and got == "DH" and g.lower().startswith("ffdhe")
+                                and _parse_session(t)[0] == "TLSv1.3" and str(_temp_key_bits(t)) == g[5:])
                 state = True if same else None  # completed without that group (e.g. static RSA): no evidence
             else:
                 state = False if _SERVER_REFUSAL.search(t) else None
@@ -489,7 +619,10 @@ def _parse_enum(out):
 
 # OpenSSL reports some groups under other names (Temp Key lines)
 _GROUP_ALIASES = {"prime256v1": ("secp256r1",), "secp256r1": ("secp256r1",), "secp384r1": ("secp384r1",),
-                  "secp521r1": ("secp521r1",), "x25519": ("x25519",), "x448": ("x448",)}
+                  "secp521r1": ("secp521r1",), "x25519": ("x25519",), "x448": ("x448",),
+                  "brainpoolp256r1": ("brainpoolp256r1", "brainpoolp256r1tls13"),
+                  "brainpoolp384r1": ("brainpoolp384r1", "brainpoolp384r1tls13"),
+                  "brainpoolp512r1": ("brainpoolp512r1", "brainpoolp512r1tls13")}
 
 
 def _parse_cert_text(t):
@@ -566,7 +699,8 @@ def capture_cert(host, port=443):
         sys.stderr.write(f"[warn] endpoint {host!r}: not a valid hostname or IP, skipped\n")
         return None
     hp, h = _hp(host, port)
-    base = f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} 2>/dev/null | openssl x509 -noout"
+    base = (f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} 2>/dev/null | {_HS_CUT} "
+            f"| openssl x509 -noout")
     meta = run(base + " -subject -issuer -dates -fingerprint -sha256")
     text = run(base + " -text")
     if not text:
@@ -582,8 +716,10 @@ def capture_cert(host, port=443):
     key_alg = grab(r"Public Key Algorithm:\s*(\S+)", text)
     sig_alg = grab(r"Signature Algorithm:\s*(\S+)", text)
     fp = grab(r"(?i)sha256 Fingerprint=(\S+)", meta)
+    # Count only the certificates s_client printed for the handshake: PEM blocks the server sends afterwards as
+    # application data would otherwise inflate the chain depth.
     chain = run(f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} "
-                f"-showcerts 2>/dev/null | grep -c 'BEGIN CERTIFICATE'")
+                f"-showcerts 2>/dev/null | {_HS_CUT} | grep -c '^-----BEGIN CERTIFICATE-----$'")
     tls_protocol, tls_cipher = _parse_session(
         run(f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} 2>&1"))
     kex_group, kex_probe_via, kex_complete = _probe_kex_group(host, port)
@@ -614,6 +750,7 @@ def capture_cert(host, port=443):
     if not tls_cipher and classical_only and classical_only.get("cipher"):
         # e.g. a server that requests a client certificate: the classical probe saw its session parameters
         tls_protocol, tls_cipher = tls_protocol or classical_only.get("protocol"), classical_only.get("cipher")
+    kex_group, kex_note = _check_mlkem_claim(kex_group, enumeration)
     return {
         "host": host if port == 443 else f"{host}:{port}",
         "subject": grab(r"subject=(.*)", meta),
@@ -630,6 +767,7 @@ def capture_cert(host, port=443):
         "tls_cipher": tls_cipher,
         "kex_probe_via": kex_probe_via,
         "kex_partial": kex_partial,
+        "kex_note": kex_note,
         "classical_only": classical_only,
         "enumeration": enumeration,
         "fingerprint": fp.replace(":", "").lower() if fp else None,
@@ -664,7 +802,7 @@ def _capture_via_enumeration(host, port):
     primary = next((c for c in certs if c.get("requested") == "ANY"), certs[0])
     sess = _enum_session(en)
     classical_only = _probe_classical_only(host, port) if CLASSICAL_PROBE else None
-    grp = sess.get("group")
+    grp, kex_note = _check_mlkem_claim(sess.get("group"), en)
     return {
         "host": host if port == 443 else f"{host}:{port}",
         "subject": primary.get("subject"), "issuer": primary.get("issuer"),
@@ -674,7 +812,7 @@ def _capture_via_enumeration(host, port):
         # the enumeration client offers every group; what it negotiated is the endpoint's key exchange
         "kex_group": grp, "tls_protocol": sess.get("protocol"), "tls_cipher": sess.get("cipher"),
         "kex_probe_via": f"enumeration client ({en.get('client')}); the host OpenSSL could not connect",
-        "kex_partial": None, "classical_only": classical_only, "enumeration": en,
+        "kex_partial": None, "kex_note": kex_note, "classical_only": classical_only, "enumeration": en,
         "fingerprint": primary.get("fingerprint"),
     }
 
@@ -1005,7 +1143,7 @@ class CBOM:
         self.dependencies.append({"ref": ref, "dependsOn": deps})
 
     def add_tls_kex(self, host, kex_group=None, protocol=None, cipher=None, kex_partial=None,
-                    classical_only=None, enumeration=None):
+                    classical_only=None, enumeration=None, kex_note=None):
         """Add one TLS interface per endpoint: negotiated version, cipher suite, key exchange.
 
         Shaped for the PKI Consortium CBOM interface profiles: the asset is a 'service' interface
@@ -1065,6 +1203,8 @@ class CBOM:
         props.append({"name": P + "disclosure:implementationPurl", "value": "unknown"})
         if kex_partial:
             props.append({"name": "fedlin:kex_partial_evidence", "value": kex_partial})
+        if kex_note:
+            props.append({"name": "fedlin:kexConflict", "value": kex_note})
         en = enumeration or {}
         if en.get("status"):
             # What the server accepts, from separate handshakes (facts; the policy stage judges them).
@@ -1106,8 +1246,9 @@ class CBOM:
             if got:
                 props.append({"name": "fedlin:classicalOnlyNegotiated", "value": got})
             if co.get("offer_complete") is False:
-                props.append({"name": "fedlin:classicalOnlyOfferReduced",
-                              "value": "FIPS-mode client: X25519 and X448 not offered"})
+                reduced = ("client OpenSSL lacks " + ",".join(co["not_offered"]) if co.get("not_offered")
+                           else "FIPS-mode client: X25519 and X448 not offered")
+                props.append({"name": "fedlin:classicalOnlyOfferReduced", "value": reduced})
             for k, name in (("tool", "fedlin:classicalOnlyTool"), ("command", "fedlin:classicalOnlyCommand")):
                 if co.get(k):
                     props.append({"name": name, "value": co[k]})
@@ -1735,7 +1876,7 @@ def main():
     for c in certs:
         b.add_certificate(c)
         b.add_tls_kex(c["host"], c.get("kex_group"), c.get("tls_protocol"), c.get("tls_cipher"),
-                      c.get("kex_partial"), c.get("classical_only"), c.get("enumeration"))
+                      c.get("kex_partial"), c.get("classical_only"), c.get("enumeration"), c.get("kex_note"))
         for x in _extra_certificates(c):
             b.add_certificate(x, extra=x["requested"])
     if certs:

@@ -38,9 +38,11 @@ SCHEMA_VERSION = "1.0"
 OBSERVABLE = [
     # TLS 1.3 / 1.2 key-exchange groups (IANA names, OpenSSL and Node.js spellings)
     "X25519MLKEM768", "SecP256r1MLKEM768", "SecP384r1MLKEM1024", "X448MLKEM1024", "MLKEM512", "MLKEM768",
-    "MLKEM1024", "ML-KEM-512", "ML-KEM-768", "ML-KEM-1024", "X25519Kyber768Draft00",
+    "MLKEM1024", "ML-KEM-512", "ML-KEM-768", "ML-KEM-1024", "X25519Kyber768Draft00", "X25519MLKEM1024",
+    "SecP256r1MLKEM1024",
     "X25519", "X448", "x25519", "x448", "secp256r1", "secp384r1", "secp521r1", "prime256v1", "P-256",
-    "P-384", "P-521", "ffdhe2048", "ffdhe3072", "ffdhe4096", "ffdhe6144", "ffdhe8192",
+    "P-384", "P-521", "ffdhe2048", "ffdhe3072", "ffdhe4096", "ffdhe6144", "ffdhe8192", "brainpoolP256r1tls13",
+    "brainpoolP384r1tls13", "brainpoolP512r1tls13",
     ("DH", 1024), ("DH", 2048), ("DH", 3072), ("DH", 4096), ("ECDH", 256), ("ECDH", 384), ("ECDH", 521),
     # certificate public keys
     ("RSA", 1024), ("RSA", 2048), ("RSA", 3072), ("RSA", 4096), ("RSA", 8192),
@@ -53,6 +55,16 @@ OBSERVABLE = [
     "sha1WithRSAEncryption", "sha256WithRSAEncryption", "sha384WithRSAEncryption", "sha512WithRSAEncryption",
     "md5WithRSAEncryption", "rsassaPss", "RSASSA-PSS", "ecdsa-with-SHA1", "ecdsa-with-SHA256",
     "ecdsa-with-SHA384", "ecdsa-with-SHA512", "ED25519", "id-ml-dsa-44", "id-ml-dsa-65", "id-ml-dsa-87",
+    # TLS signature schemes and other spellings of SHA-1 signatures; composite ML-DSA (IETF draft names)
+    "RSA-SHA1", "rsa_pkcs1_sha1", "ecdsa_sha1", "MLDSA87-ECDSA-P384-SHA512", "MLDSA87-Ed448",
+    "MLDSA65-RSA3072-PSS-SHA512", "MLDSA65-ECDSA-P256-SHA512", "MLDSA44-Ed25519-SHA512",
+    "MLDSA87-RSA3072-PSS-SHA512", "MLDSA44-RSA2048-PSS-SHA256", "MLDSA87-ECDSA-brainpoolP384r1-SHA512",
+    # pre-standard drafts (FIPS 203/204/205 initial public drafts, Kyber, Dilithium, SPHINCS+) and other spellings
+    # of the standard names
+    "ML-KEM-768-ipd", "ML-KEM-1024-ipd", "MLKEM1024-IPD", "ML-DSA-65-ipd", "ML-DSA-87-ipd",
+    "SLH-DSA-SHA2-128s-ipd", "kyber768", "kyber1024", "dilithium3", "dilithium5", "p256_kyber768",
+    "id-alg-slh-dsa-sha2-128s", "id-alg-slh-dsa-shake-128s", "FN-DSA-512", "FN-DSA-1024", "FN-DSA-1024-padded",
+    "Falcon-512", "p256_falcon512", "SPHINCS+-SHA2-128s-simple",
     # protocol versions and common TLS 1.3 cipher suites
     "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3", "SSLv3",
     "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",

@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.3"
+RULESET_VERSION = "1.0.4"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -66,6 +66,10 @@ SOURCES = {
     "RFC9142": "IETF RFC 9142, Key Exchange Method Updates for SSH (SHA-1 and 1024-bit DH: SHOULD NOT / MUST NOT)",
     "OPENSSH-RSA-SHA1": "OpenSSH 8.8 release notes (ssh-rsa SHA-1 signatures disabled by default)",
     "NCSC-TLS": "UK NCSC, Using TLS to protect data (v1.2): TLS 1.3 is the only version that supports PQC",
+    "LAMPS-COMPOSITE": "IETF draft-ietf-lamps-pq-composite-sigs (composite ML-DSA with a classical signature; "
+                       "an Internet-Draft, not yet a standard)",
+    "RFC5054": "IETF RFC 5054, Using the Secure Remote Password (SRP) Protocol for TLS Authentication "
+               "(key exchange over a finite-field Diffie-Hellman group)",
 }
 
 # ---------------------------------------------------------------------------
@@ -173,7 +177,90 @@ ALGORITHMS = {
                                 note="Pre-standard Kyber hybrid codepoint. Not FIPS 203 ML-KEM.",
                                 target={"civilian": "Replace with X25519MLKEM768 (FIPS 203 hybrid)",
                                         "nss": "Replace with ML-KEM-1024 based key exchange (CNSA 2.0)"}),
+    # Pre-standard round-3 submissions. FIPS 203/204/205 changed each algorithm (FIPS 203 Appendix C, FIPS 204
+    # Appendix D, FIPS 205 Appendix A: "Differences from the ... submission"), so Kyber, Dilithium and SPHINCS+ are
+    # not ML-KEM, ML-DSA or SLH-DSA and do not interoperate with them.
+    "kyber": _a("pqc", "kem", _KEM_FN, compliant=_NONE, family="Kyber", standard="pre-standard",
+                controls=["SC-8", "SC-12"], cite=["FIPS203", "CNSA2"],
+                note="Pre-standard CRYSTALS-Kyber (alone or in a hybrid). Quantum-resistant, but not FIPS 203 "
+                     "ML-KEM: FIPS 203 changed the algorithm (Appendix C).",
+                target={"civilian": "Replace with ML-KEM (FIPS 203), e.g. hybrid X25519MLKEM768",
+                        "nss": "Replace with ML-KEM-1024 based key exchange (CNSA 2.0)"}),
+    # Hybrids of ML-KEM with a classical key exchange in a pairing that is not a registered TLS group or SSH method
+    # (e.g. X25519MLKEM1024, SecP256r1MLKEM1024). Judged as hybrids: quantum-resistant through the ML-KEM half;
+    # CNSA 2.0 compliance is given only to the registered ML-KEM-1024 + P-384 pairings above.
+    "hybrid-ml-kem-512": _a("pqc", "kem", _KEM_FN, level=1, compliant=_CIV, family="ML-KEM",
+                            param="hybrid ML-KEM-512", standard="pre-standard", controls=["SC-8", "SC-12", "SC-13"],
+                            cite=["FIPS203", "CNSA2"],
+                            note="Hybrid of ML-KEM-512 and a classical key exchange (not a registered pairing). "
+                                 "Quantum-resistant key establishment through its ML-KEM half.",
+                            target={"civilian": "None (hybrid ML-KEM-512; ML-KEM-768 is the NIST default)",
+                                    "nss": "SecP384r1MLKEM1024 or ML-KEM-1024 (CNSA 2.0)"}),
+    "hybrid-ml-kem-768": _a("pqc", "kem", _KEM_FN, level=3, compliant=_CIV, family="ML-KEM",
+                            param="hybrid ML-KEM-768", standard="pre-standard", controls=["SC-8", "SC-12", "SC-13"],
+                            cite=["FIPS203", "CNSA2"],
+                            note="Hybrid of ML-KEM-768 and a classical key exchange (not a registered pairing). "
+                                 "Quantum-resistant key establishment through its ML-KEM half.",
+                            target={"civilian": "None (hybrid ML-KEM-768)",
+                                    "nss": "SecP384r1MLKEM1024 or ML-KEM-1024 (CNSA 2.0)"}),
+    "hybrid-ml-kem-1024": _a("pqc", "kem", _KEM_FN, level=5, compliant=_CIV, family="ML-KEM",
+                             param="hybrid ML-KEM-1024", standard="pre-standard", controls=["SC-8", "SC-12", "SC-13"],
+                             cite=["FIPS203", "CNSA2"],
+                             note="Hybrid of ML-KEM-1024 and a classical key exchange other than P-384 (not a "
+                                  "registered pairing). Quantum-resistant key establishment through its ML-KEM half.",
+                             target={"civilian": "None (hybrid ML-KEM-1024)",
+                                     "nss": "SecP384r1MLKEM1024 or ML-KEM-1024 (CNSA 2.0)"}),
+    # The initial public drafts (Aug 2023) differ from the final standards (FIPS 203 Appendix C.2, FIPS 204
+    # Appendix D.3, FIPS 205 Appendix A.1); an implementation of a draft is not a FIPS implementation.
+    "ml-kem-ipd": _a("pqc", "kem", _KEM_FN, compliant=_NONE, family="ML-KEM", param="ML-KEM (FIPS 203 ipd)",
+                     standard="pre-standard", controls=["SC-8", "SC-12"], cite=["FIPS203", "CNSA2"],
+                     note="ML-KEM from the FIPS 203 initial public draft (2023). Quantum-resistant, but the final "
+                          "standard changed key generation (Appendix C.2), so it is not FIPS 203 ML-KEM.",
+                     target={"civilian": "Replace with ML-KEM (FIPS 203 final)",
+                             "nss": "Replace with ML-KEM-1024 (FIPS 203 final, CNSA 2.0)"}),
     # --- Quantum-resistant signatures -------------------------------------------
+    "ml-dsa-ipd": _a("pqc", "signature", _SIG_FN, compliant=_NONE, family="ML-DSA", param="ML-DSA (FIPS 204 ipd)",
+                     standard="pre-standard", controls=["SC-13", "SC-17"], cite=["FIPS204", "CNSA2"],
+                     note="ML-DSA from the FIPS 204 initial public draft (2023). Quantum-resistant, but the final "
+                          "standard changed signing and verification (Appendix D.3), so it is not FIPS 204 ML-DSA.",
+                     target={"civilian": "Replace with ML-DSA (FIPS 204 final)",
+                             "nss": "Replace with ML-DSA-87 (FIPS 204 final, CNSA 2.0)"}),
+    "slh-dsa-ipd": _a("pqc", "signature", _SIG_FN, compliant=_NONE, family="SLH-DSA",
+                      param="SLH-DSA (FIPS 205 ipd)", standard="pre-standard", controls=["SC-13", "SC-17"],
+                      cite=["FIPS205", "CNSA2"],
+                      note="SLH-DSA from the FIPS 205 initial public draft (2023). Quantum-resistant, but the final "
+                           "standard added domain separation to signing (Appendix A.1), so it is not FIPS 205 SLH-DSA.",
+                      target={"civilian": "Replace with SLH-DSA (FIPS 205 final)",
+                              "nss": "ML-DSA-87, or LMS/XMSS for firmware (CNSA 2.0)"}),
+    # Composite signatures: ML-DSA together with a classical signature (an Internet-Draft). Judged like the ML-KEM
+    # hybrids: quantum-resistant through the ML-DSA half (a forger must break both); compliant under civilian as
+    # far as the ML-DSA half is; under nss only ML-DSA-87 with a CNSA-compatible classical half (ECDSA P-384 or
+    # RSA of at least 3072 bits).
+    "composite-ml-dsa-44": _a("pqc", "signature", _SIG_FN, level=2, compliant=_CIV, family="ML-DSA",
+                              param="composite ML-DSA-44", standard="pre-standard", controls=["SC-13", "SC-17"],
+                              cite=["LAMPS-COMPOSITE", "FIPS204", "CNSA2"],
+                              note="Composite ML-DSA-44 with a classical signature (combination format: IETF draft; ML-DSA is FIPS 204). Quantum-resistant through its "
+                                   "ML-DSA half.",
+                              target={"civilian": "None (composite ML-DSA-44)", "nss": "ML-DSA-87 (CNSA 2.0)"}),
+    "composite-ml-dsa-65": _a("pqc", "signature", _SIG_FN, level=3, compliant=_CIV, family="ML-DSA",
+                              param="composite ML-DSA-65", standard="pre-standard", controls=["SC-13", "SC-17"],
+                              cite=["LAMPS-COMPOSITE", "FIPS204", "CNSA2"],
+                              note="Composite ML-DSA-65 with a classical signature (combination format: IETF draft; ML-DSA is FIPS 204). Quantum-resistant through its "
+                                   "ML-DSA half.",
+                              target={"civilian": "None (composite ML-DSA-65)", "nss": "ML-DSA-87 (CNSA 2.0)"}),
+    "composite-ml-dsa-87": _a("pqc", "signature", _SIG_FN, level=5, compliant=_CIV, family="ML-DSA",
+                              param="composite ML-DSA-87", standard="pre-standard", controls=["SC-13", "SC-17"],
+                              cite=["LAMPS-COMPOSITE", "FIPS204", "CNSA2"],
+                              note="Composite ML-DSA-87 with a classical signature that is not CNSA-compatible "
+                                   "(e.g. Ed448); combination format: IETF draft. Quantum-resistant through its ML-DSA half.",
+                              target={"civilian": "None (composite ML-DSA-87)",
+                                      "nss": "ML-DSA-87, alone or with ECDSA P-384 (CNSA 2.0)"}),
+    "composite-ml-dsa-87-cnsa": _a("pqc", "signature", _SIG_FN, level=5, compliant=_BOTH, family="ML-DSA",
+                                   param="composite ML-DSA-87 (ECDSA P-384 or RSA-3072+)", standard="pre-standard",
+                                   controls=["SC-13", "SC-17"], cite=["LAMPS-COMPOSITE", "FIPS204", "CNSA2"],
+                                   note="Composite ML-DSA-87 with ECDSA P-384 or RSA of at least 3072 bits (combination format: IETF draft; ML-DSA is FIPS 204).",
+                                   target={"civilian": "None (composite ML-DSA-87)",
+                                           "nss": "None (ML-DSA-87 composite)"}),
     "ml-dsa-44": _a("pqc", "signature", _SIG_FN, level=2, compliant=_CIV, family="ML-DSA", param="ML-DSA-44",
                     controls=["SC-13", "SC-17"], cite=["FIPS204", "CNSA2"], note="FIPS 204 Category 2.",
                     target={"civilian": "None (FIPS 204 Category 2)", "nss": "ML-DSA-87 (CNSA 2.0)"}),
@@ -205,6 +292,18 @@ ALGORITHMS = {
                   note="SLH-DSA without a parameter set. Quantum-resistant (FIPS 205).",
                   target={"civilian": "None (FIPS 205; confirm parameter set)",
                           "nss": "ML-DSA-87, or LMS/XMSS for firmware (CNSA 2.0)"}),
+    "dilithium": _a("pqc", "signature", _SIG_FN, compliant=_NONE, family="Dilithium", standard="pre-standard",
+                    controls=["SC-13", "SC-17"], cite=["FIPS204", "CNSA2"],
+                    note="Pre-standard CRYSTALS-Dilithium. Quantum-resistant, but not FIPS 204 ML-DSA: FIPS 204 "
+                         "changed the algorithm (Appendix D).",
+                    target={"civilian": "Replace with ML-DSA (FIPS 204)", "nss": "Replace with ML-DSA-87 (CNSA 2.0)"}),
+    "sphincs+": _a("pqc", "signature", _SIG_FN, compliant=_NONE, family="SPHINCS+", standard="pre-standard",
+                   controls=["SC-13", "SC-17"], cite=["FIPS205", "CNSA2"],
+                   note="Pre-standard SPHINCS+. Quantum-resistant, but not FIPS 205 SLH-DSA: FIPS 205 changed the "
+                        "algorithm and approves only the simple SHA2 and SHAKE parameter sets (Appendix A), not "
+                        "Haraka.",
+                   target={"civilian": "Replace with SLH-DSA (FIPS 205, SHA2 or SHAKE parameter sets) or ML-DSA",
+                           "nss": "ML-DSA-87, or LMS/XMSS for firmware (CNSA 2.0)"}),
     "lms": _a("pqc", "signature", _SIG_FN, level=5, compliant=_BOTH, family="LMS",
               controls=["SC-13", "SC-17"], cite=["SP800-208", "CNSA2"],
               note="Stateful hash-based signature (SP 800-208). CNSA 2.0 approves LMS and XMSS for software and "
@@ -260,6 +359,10 @@ ALGORITHMS = {
                   controls=["SC-12", "SC-13"], cite=["IR8547"], note="ElGamal. Quantum-vulnerable."),
     "sm2": _a("qv", "pke", ["sign", "verify", "encrypt", "decrypt"], level=0, family="SM2", standard="non-nist",
               controls=["SC-12", "SC-13"], cite=["IR8547"], note="SM2 (non-NIST curve). Quantum-vulnerable."),
+    "srp": _a("qv", "key-agree", ["keygen"], level=0, family="SRP", standard="non-nist",
+              controls=["SC-8", "SC-12"], cite=["RFC5054", "IR8547"],
+              note="SRP key exchange (RFC 5054) runs over a finite-field Diffie-Hellman group: quantum-vulnerable "
+                   "(discrete logarithm) and not a NIST-approved key-establishment scheme."),
     # --- Symmetric ------------------------------------------------------------------
     "aes-128": _a("sym", "block-cipher", _ENC_FN, level=1, strength=128, compliant=_CIV, family="AES",
                   param="128", controls=["SC-13", "SC-28"], cite=["SP800-131A", "CNSA2"],
@@ -399,10 +502,12 @@ def _compact(s):
 # Exact aliases, keyed by compact form (lowercase, alphanumerics only).
 _ALIAS_RAW = {
     # PQC KEM
-    "ml-kem-512": "ml-kem-512", "mlkem512": "ml-kem-512", "kyber512": "ml-kem-512",
-    "ml-kem-768": "ml-kem-768", "mlkem768": "ml-kem-768", "kyber768": "ml-kem-768",
-    "ml-kem-1024": "ml-kem-1024", "mlkem1024": "ml-kem-1024", "kyber1024": "ml-kem-1024",
-    "ml-kem": "ml-kem", "mlkem": "ml-kem", "kyber": "ml-kem",
+    "ml-kem-512": "ml-kem-512", "mlkem512": "ml-kem-512",
+    "ml-kem-768": "ml-kem-768", "mlkem768": "ml-kem-768",
+    "ml-kem-1024": "ml-kem-1024", "mlkem1024": "ml-kem-1024",
+    "ml-kem": "ml-kem", "mlkem": "ml-kem",
+    # Pre-standard Kyber is not FIPS 203 ML-KEM (1.0.4; before, these read as ML-KEM)
+    "kyber512": "kyber", "kyber768": "kyber", "kyber1024": "kyber", "kyber": "kyber",
     "x25519mlkem768": "x25519mlkem768", "x25519_mlkem768": "x25519mlkem768",
     "secp256r1mlkem768": "secp256r1mlkem768", "p256mlkem768": "secp256r1mlkem768",
     "secp384r1mlkem1024": "secp384r1mlkem1024", "p384mlkem1024": "secp384r1mlkem1024",
@@ -410,18 +515,27 @@ _ALIAS_RAW = {
     "mlkem768nistp256-sha256": "mlkem768nistp256-sha256",
     "mlkem1024nistp384-sha384": "mlkem1024nistp384-sha384",
     "x448mlkem1024": "x448mlkem1024", "x448_mlkem1024": "x448mlkem1024",
+    "hybrid-ml-kem-512": "hybrid-ml-kem-512", "hybrid-ml-kem-768": "hybrid-ml-kem-768",
+    "hybrid-ml-kem-1024": "hybrid-ml-kem-1024", "ml-kem-ipd": "ml-kem-ipd", "ml-dsa-ipd": "ml-dsa-ipd",
+    "slh-dsa-ipd": "slh-dsa-ipd", "composite-ml-dsa-44": "composite-ml-dsa-44",
+    "composite-ml-dsa-65": "composite-ml-dsa-65", "composite-ml-dsa-87": "composite-ml-dsa-87",
+    "composite-ml-dsa-87-cnsa": "composite-ml-dsa-87-cnsa",
     "sntrup761x25519-sha512": "sntrup761x25519-sha512",
     "sntrup761x25519-sha512@openssh.com": "sntrup761x25519-sha512",
     "x25519kyber768draft00": "x25519kyber768draft00", "x25519_kyber768": "x25519kyber768draft00",
     "x25519kyber768": "x25519kyber768draft00",
     # PQC signatures
-    "ml-dsa-44": "ml-dsa-44", "mldsa44": "ml-dsa-44", "dilithium2": "ml-dsa-44",
-    "ml-dsa-65": "ml-dsa-65", "mldsa65": "ml-dsa-65", "dilithium3": "ml-dsa-65",
-    "ml-dsa-87": "ml-dsa-87", "mldsa87": "ml-dsa-87", "dilithium5": "ml-dsa-87",
-    "ml-dsa": "ml-dsa", "mldsa": "ml-dsa", "dilithium": "ml-dsa",
-    "slh-dsa": "slh-dsa", "slhdsa": "slh-dsa", "sphincs+": "slh-dsa", "sphincsplus": "slh-dsa", "sphincs": "slh-dsa",
+    "ml-dsa-44": "ml-dsa-44", "mldsa44": "ml-dsa-44",
+    "ml-dsa-65": "ml-dsa-65", "mldsa65": "ml-dsa-65",
+    "ml-dsa-87": "ml-dsa-87", "mldsa87": "ml-dsa-87",
+    "ml-dsa": "ml-dsa", "mldsa": "ml-dsa",
+    # Pre-standard Dilithium and SPHINCS+ are not FIPS 204 ML-DSA or FIPS 205 SLH-DSA (1.0.4)
+    "dilithium2": "dilithium", "dilithium3": "dilithium", "dilithium5": "dilithium", "dilithium": "dilithium",
+    "slh-dsa": "slh-dsa", "slhdsa": "slh-dsa",
+    "sphincs+": "sphincs+", "sphincsplus": "sphincs+", "sphincs": "sphincs+",
     "lms": "lms", "hss": "lms", "hss/lms": "lms", "xmss": "xmss", "xmssmt": "xmss",
     "falcon": "fn-dsa", "fn-dsa": "fn-dsa", "fndsa": "fn-dsa", "falcon512": "fn-dsa", "falcon1024": "fn-dsa",
+    "fn-dsa-512": "fn-dsa", "fn-dsa-1024": "fn-dsa",
     # Quantum-vulnerable public key (OpenSSL names)
     "rsa": "rsa", "rsaencryption": "rsa", "rsassapss": "rsa", "rsassa-pss": "rsa", "rsa-pss": "rsa",
     "rsaes-oaep": "rsa", "rsa-oaep": "rsa", "rsa-sha2-256": "rsa", "rsa-sha2-512": "rsa",
@@ -431,7 +545,7 @@ _ALIAS_RAW = {
     "x25519": "x25519", "curve25519": "x25519", "x448": "x448", "curve448": "x448",
     "ed25519": "ed25519", "ssh-ed25519": "ed25519", "eddsa": "eddsa", "ed448": "ed448", "ssh-ed448": "ed448",
     "dh": "dh", "dhe": "dh", "dhkeyagreement": "dh", "diffie-hellman": "dh", "diffiehellman": "dh", "ffdhe": "dh",
-    "mqv": "mqv", "ecmqv": "mqv", "elgamal": "elgamal", "sm2": "sm2",
+    "mqv": "mqv", "ecmqv": "mqv", "elgamal": "elgamal", "sm2": "sm2", "srp": "srp",
     # Symmetric
     "chacha20": "chacha20", "chacha20-poly1305": "chacha20", "chacha20-poly1305@openssh.com": "chacha20",
     "xchacha20-poly1305": "chacha20",
@@ -516,7 +630,20 @@ TLS_GROUPS = {
     "prime256v1": ("ecdh", 256), "p256": ("ecdh", 256), "p384": ("ecdh", 384), "p521": ("ecdh", 521),
     "ffdhe2048": ("dh", 2048), "ffdhe3072": ("dh", 3072), "ffdhe4096": ("dh", 4096),
     "ffdhe6144": ("dh", 6144), "ffdhe8192": ("dh", 8192),
+    # RFC 8734 TLS 1.3 brainpool groups (non-NIST curves; classify() adds that note)
+    "brainpoolp256r1tls13": ("ecdh", 256), "brainpoolp384r1tls13": ("ecdh", 384),
+    "brainpoolp512r1tls13": ("ecdh", 512),
+    # RFC 7027 TLS 1.2 brainpool groups; OpenSSL also names the TLS 1.3 key exchange this way on its Temp Key line
+    "brainpoolp256r1": ("ecdh", 256), "brainpoolp384r1": ("ecdh", 384), "brainpoolp512r1": ("ecdh", 512),
 }
+
+# Classical halves of an ML-KEM hybrid name (compact spelling, longest first)
+_HYBRID_CLASSICAL = (("brainpoolp256r1", "bp256"), ("brainpoolp384r1", "bp384"), ("brainpoolp512r1", "bp512"),
+                     ("curve25519", "x25519"), ("x25519", "x25519"), ("curve448", "x448"), ("x448", "x448"),
+                     ("secp256r1", "p256"), ("prime256v1", "p256"), ("nistp256", "p256"), ("p256", "p256"),
+                     ("secp384r1", "p384"), ("nistp384", "p384"), ("p384", "p384"),
+                     ("secp521r1", "p521"), ("nistp521", "p521"), ("p521", "p521"),
+                     ("ffdhe", "dh"), ("ecdh", "ecdh"), ("rsa", "rsa"))
 
 # Identifiers that are protocol markers, not algorithms (skip, do not score).
 _PSEUDO = re.compile(r"^(kex-strict-[cs]-v00@openssh\.com|ext-info-[cs]|kex-strict.*|none)$", re.I)
@@ -611,12 +738,14 @@ def normalize(name, bits=None):
     sc = _compact(ssh)
     if sc in SSH_KEX:
         cid, b, extra = SSH_KEX[sc]
+        b = b if b is not None else bits  # group-exchange: the size is the one observed, not fixed by the name
         comps = [(cid, b, raw)]
         if extra:
             comps.append((extra, None, raw + " (hash)"))
         return comps, b
     if sc in SSH_HOSTKEY:
         cid, b, extra = SSH_HOSTKEY[sc]
+        b = b if b is not None else bits  # e.g. an RSA (certificate) host key: its observed size counts
         comps = [(cid, b, raw)]
         if extra:
             comps.append((extra, None, raw + " (signature hash)"))
@@ -631,20 +760,79 @@ def normalize(name, bits=None):
 
     toks = _tokens(low)
 
-    # 4. Explicit PQC parameter sets inside longer names
-    m = re.search(r"ml-?kem-?(512|768|1024)", low) or re.search(r"mlkem(512|768|1024)", c)
+    # 4. Explicit PQC parameter sets inside longer names. The parameter set must end there: "mlkem10240" is not
+    # ML-KEM-1024. A name marked as the 2023 initial public draft ("-ipd") is that draft, not the standard.
+    ipd = bool(re.search(r"(?<![a-z])ipd(?![a-z])", low)) or c.endswith("ipd")
+    m = re.search(r"mlkem(512|768|1024)(?![0-9])", c)
     if m:
-        # Hybrids not listed above (e.g. a future curve pairing) are judged by their ML-KEM component;
-        # the classical half never makes a hybrid quantum-vulnerable.
-        return [("ml-kem-" + m.group(1), None, raw)], None
-    m = re.search(r"ml-?dsa-?(44|65|87)", low) or re.search(r"mldsa(44|65|87)", c)
+        if ipd:
+            return [("ml-kem-ipd", None, raw)], None
+        # A classical half makes it a hybrid, judged as one: quantum-resistant through ML-KEM (the classical half
+        # never makes it quantum-vulnerable), and compliant only as far as the pairing is (1.0.4; before, any
+        # pairing read as pure ML-KEM, e.g. X25519MLKEM1024 as CNSA 2.0 compliant).
+        rest = c[:m.start()] + c[m.end():]
+        half = next((h for name, h in _HYBRID_CLASSICAL if name in rest), None)
+        if half is None:
+            return [("ml-kem-" + m.group(1), None, raw)], None
+        known = {("x25519", "768"): "x25519mlkem768", ("p256", "768"): "secp256r1mlkem768",
+                 ("p384", "1024"): "secp384r1mlkem1024", ("x448", "1024"): "x448mlkem1024"}
+        return [(known.get((half, m.group(1)), "hybrid-ml-kem-" + m.group(1)), None, raw)], None
+    m = re.search(r"mldsa(44|65|87)(?![0-9])", c)
     if m:
-        return [("ml-dsa-" + m.group(1), None, raw)], None
-    if "slh" in c or "sphincs" in c:
-        m = re.search(r"(128|192|256)[sf]", c)
-        return [("slh-dsa-" + m.group(1) if m else "slh-dsa", None, raw)], None
-    if re.search(r"kyber", c) and "x25519" in c:
-        return [("x25519kyber768draft00", None, raw)], None
+        if ipd:
+            return [("ml-dsa-ipd", None, raw)], None
+        # A composite (ML-DSA with a classical signature) is judged as one, like the ML-KEM hybrids (1.0.4; before,
+        # the classical half was dropped). HashML-DSA ("...-with-SHA512") is ML-DSA.
+        rest = c[:m.start()] + c[m.end():]
+        # A composite with a SHA-1 or MD5 hash is not a combination the draft defines: reported for review, never
+        # judged by its ML-DSA half (round-2 review). "rsa" must start a word in the name as written, so a word
+        # that merely contains it ("universal") is not an RSA half.
+        if re.search(r"sha1(?![0-9])|md5", rest):
+            return [], bits
+        rsa = re.search(r"(?<![a-z])rsa[-_ ]?(\d{4})?", low)
+        ec = re.search(r"ecdsa|ed25519|ed448|p256|p384|p521|secp\d+r1|nistp\d+|brainpool", rest)
+        if not (rsa or ec):
+            return [("ml-dsa-" + m.group(1), None, raw)], None
+        p384 = re.search(r"ecdsa.*(p384|secp384r1|nistp384)|(p384|secp384r1|nistp384).*ecdsa", rest) \
+            and "brainpool" not in rest
+        cnsa_half = p384 or (rsa and not ec and rsa.group(1) and int(rsa.group(1)) >= 3072)
+        if m.group(1) == "87" and cnsa_half:
+            return [("composite-ml-dsa-87-cnsa", None, raw)], None
+        return [("composite-ml-dsa-" + m.group(1), None, raw)], None
+    # SLH-DSA is FIPS 205's simple SHA2 and SHAKE parameter sets only (FIPS 205 Section 11, Appendix A), pure or
+    # pre-hash (HashSLH-DSA, Section 10.2.2) with an approved hash. Any prefix is allowed (id-alg-, CKM_, OpenSSL).
+    # SPHINCS+ (the submission, including Haraka) is not SLH-DSA; any other suffix (e.g. "-v2", "-md5") is not
+    # recognized and is reported for review (1.0.4).
+    if "sphincs" in c:
+        return [("sphincs+", None, raw)], None
+    sm = re.search(r"(?<![a-z0-9])slh[-_ ]?dsa", low)
+    i = (len(_compact(low[:sm.start()])) if sm else
+         (c.index("slhdsa") if re.match(r"^(?:id|idalg|idhash|hash)?slhdsa", c) else -1))
+    if i >= 0:
+        rest = c[i + 6:]
+        if "haraka" in rest:
+            return [("sphincs+", None, raw)], None
+        if ipd:
+            return [("slh-dsa-ipd", None, raw)], None
+        p = re.fullmatch(r"(?:sha2|shake)?(?:(128|192|256)[sf]?)?(.*)", rest)
+        tail = p.group(2)
+        prehash = r"(?:with)?(?:sha224|sha256|sha384|sha512|sha512224|sha512256|sha3224|sha3256|sha3384|sha3512|" \
+                  r"shake128|shake256)"
+        if tail in ("", "pure", "prehash") or re.fullmatch(prehash, tail):
+            return [("slh-dsa-" + p.group(1) if p.group(1) else "slh-dsa", None, raw)], None
+        return [], bits
+    # Pre-standard Kyber and Dilithium, alone or in hybrids, are not ML-KEM or ML-DSA (1.0.4)
+    if "kyber" in c:
+        return [("x25519kyber768draft00" if "x25519" in c else "kyber", None, raw)], None
+    if "dilithium" in c:
+        return [("dilithium", None, raw)], None
+    # FN-DSA (FIPS 206 draft) and Falcon, in any variant (padded, pre-hash, hybrid): never the classical DSA its name
+    # contains (1.0.4; before, FN-DSA-512 read as DSA, Critical)
+    if "fndsa" in c or "falcon" in c:
+        return [("fn-dsa", None, raw)], None
+    # Nothing that names a post-quantum family may fall through to a classical token below ("dsa", "rsa", a curve)
+    if any(k in c for k in ("slh", "mldsa", "mlkem")):
+        return [], bits
 
     # 5. TLS / OpenSSL cipher suites and composite names -> components
     comps = []
@@ -660,7 +848,11 @@ def normalize(name, bits=None):
     # Anonymous (ADH, AECDH: no server authentication) and NULL-encryption suites, in OpenSSL or IANA spelling
     unprotected = len(toks) >= 2 and bool(set(toks) & {"adh", "aecdh", "anon", "null"}) and (
         toks[-1] in ("sha", "sha256", "sha384", "md5") or c.startswith("tls"))
-    is_suite = is_suite or bool(static_rsa) or unprotected
+    # PSK and SRP suites (PSK-AES256-CBC-SHA, SRP-RSA-AES-256-CBC-SHA): judged by every component, not by their
+    # cipher alone (1.0.4; before, the cipher was the whole verdict and the MAC and key exchange were dropped).
+    psk_srp = bool(set(toks) & {"psk", "srp"}) and any(
+        re.match(r"^(aes|camellia|aria|chacha20|3des|des|rc4|null|cbc3)", t) for t in toks)
+    is_suite = is_suite or bool(static_rsa) or unprotected or psk_srp
     if is_suite:
         tok_set = set(toks)
         if tok_set & {"null", "anon", "export", "exp", "adh", "aecdh"}:
@@ -669,9 +861,12 @@ def normalize(name, bits=None):
             comps.append(("ecdh", None, raw + " (key exchange)"))
         elif tok_set & {"dhe", "edh", "dh"}:
             comps.append(("dh", None, raw + " (key exchange)"))
-        elif ("rsa" in tok_set and "with" in tok_set and toks[1] == "rsa") or static_rsa:
+        elif "srp" in tok_set:
+            comps.append(("srp", None, raw + " (key exchange)"))
+        elif ("rsa" in tok_set and "with" in tok_set and toks[1] == "rsa") or static_rsa or (
+                "psk" in tok_set and toks[0] == "rsa"):
             comps.append(("rsa", None, raw + " (RSA key transport, no forward secrecy)"))
-        if "rsa" in tok_set and ("ecdhe" in tok_set or "dhe" in tok_set or "edh" in tok_set):
+        if "rsa" in tok_set and ("ecdhe" in tok_set or "dhe" in tok_set or "edh" in tok_set or "srp" in tok_set):
             comps.append(("rsa", None, raw + " (authentication)"))
         if "ecdsa" in tok_set:
             comps.append(("ecdsa", None, raw + " (authentication)"))
@@ -719,8 +914,16 @@ def normalize(name, bits=None):
                 comps.append((h, None, raw + " (signature hash)"))
             return comps, bits
 
-    # 7. Token-bounded family patterns
+    # 6b. Signature names that pair a key type with SHA-1 or MD5 without "with" (RSA-SHA1, rsa_pkcs1_sha1,
+    # ecdsa_sha1, RSA-MD5): the hash makes the signature broken, as sha1WithRSAEncryption already is (1.0.4).
     tok_set = set(toks)
+    sig = "ecdsa" if "ecdsa" in tok_set else "rsa" if tok_set & {"rsa", "rsassa"} else "dsa" if "dsa" in tok_set \
+        else None
+    h = _hash_in(toks, c)
+    if sig and h in ("sha-1", "md5") and not tok_set & {"oaep", "hmac", "kem"}:
+        return [(sig, bits, raw), (h, None, raw + " (signature hash)")], bits
+
+    # 7. Token-bounded family patterns
     # HMAC
     if "hmac" in tok_set or c.startswith("hmac"):
         h = _hash_in(toks, c.replace("hmac", ""))
@@ -926,6 +1129,9 @@ def _verdict_for(cid, bits, profile, label):
     return v
 
 
+# Placeholder names the capture stage writes for something it observed but could not read.
+PLACEHOLDER_LANES = {"unparsed-kex-group": "key-establishment", "unparsed-public-key-algorithm": "public-key"}
+
 _DEFAULT = {
     "canonical": None, "family": None, "parameter_set": None,
     "primitive": "unknown", "crypto_functions": ["unknown"],
@@ -960,6 +1166,11 @@ def classify(name, bits=None, profile=None):
         v["profile"] = profile
         v["components"] = []
         v["rule_id"] = None
+        # A name the scan wrote because it could not read the real one still sits in a known lane, so a check of
+        # that lane counts it (1.0.4; before, its finding had no lane and a lane-scoped check skipped it).
+        lane = PLACEHOLDER_LANES.get((name or "").strip())
+        if lane:
+            v["lane"] = lane
         return v
 
     verdicts = [_verdict_for(cid, b if b is not None else bits, profile, label) for cid, b, label in comps]
@@ -978,6 +1189,8 @@ def classify(name, bits=None, profile=None):
     curve = _curve_in(name or "")
     if curve in NON_NIST_CURVES:
         v["note"] += f" {curve} is not a NIST-approved curve."
+        if v["standard_status"] == "nist":
+            v["standard_status"] = "non-nist"
     v["algorithm"] = name
     v["profile"] = profile
     v["rule_id"] = f"{RULESET_VERSION}:{v['canonical']}"

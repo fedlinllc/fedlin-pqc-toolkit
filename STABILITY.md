@@ -9,7 +9,7 @@ properties, flags and tools may be added. A change that breaks any of them requi
 
 | Interface | What is stable |
 |---|---|
-| CBOM | CycloneDX 1.6 structure and the `fedlin:*` and `pkic:profile:*` property names the toolkit writes (including the per-version `fedlin:acceptedCipherSuites:<version>`), with the values they describe |
+| CBOM | CycloneDX 1.6 structure and the `fedlin:*` and `pkic:profile:*` property names the toolkit writes (including the per-version `fedlin:acceptedCipherSuites:<version>` and, from 1.4.0, `fedlin:kexConflict`: why a handshake's key-exchange group was not recorded), with the values they describe; the placeholder names `unparsed-public-key-algorithm` and (from 1.4.0) `unparsed-kex-group` for what a scan observed but could not read |
 | Policy result | The `pkic.cbom.policy-result` 0.1 top-level keys, the `policy` block (id, version, profile, ruleset digest) and the finding keys |
 | CBOM evidence | From 1.1.0: `evidence.identity` (field `name`) on the cryptographic records the toolkit writes, with one method per source as in the table below; method values start with `fedlin-pqc-toolkit/<source>:` |
 | `summary.json` | The keys of the report summary |

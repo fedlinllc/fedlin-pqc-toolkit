@@ -11,6 +11,67 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-17
+
+Ruleset 1.0.4. Upgrade if you scan servers you do not control or render reports from CBOMs others produced. A
+minor release: it adds a CBOM property, a placeholder value and ruleset canonical IDs; nothing is removed.
+
+### Security
+- **Forged key exchange (GHSA-62fw-vjj2-r4p2).** A scanned server could send "Negotiated TLS1.3 group:
+  SecP384r1MLKEM1024" as data after the handshake, and the scan recorded a classical handshake as ML-KEM (also
+  on TLS 1.2). The scan now reads only what OpenSSL printed about the handshake, up to the end of its
+  connection summary, from lines OpenSSL starts; this covers the key-exchange probe, the classical-only probe,
+  enumeration, certificate capture and the chain-depth count. A group name must be a known group (strict
+  character set); anything else is recorded as `unparsed-kex-group` (Manual review). An ML-KEM group counts
+  only when the same handshake negotiated TLS 1.3, and is not recorded when enumeration ran and found that
+  the server refuses it (`fedlin:kexConflict`). Such a key exchange counts as not observed: the report is
+  marked Incomplete and lists it, and wave checks of the key-establishment lane and `mlkem` are "not observed"
+  there, never passed.
+- **HTML injection (GHSA-gmv4-8882-x388).** Server-controlled strings (certificate subject and issuer, and
+  before the fix above the key-exchange text) and names in a CBOM merged with `--merge-cbom` reached
+  report.md, the wave, context and delta Markdown and `report.py --html`, which passed raw HTML through. The
+  HTML output now never passes raw HTML (Python-Markdown's raw HTML handling is off, link targets other than
+  http(s), mailto and relative ones are removed, the title is escaped once, and the fallback without
+  Python-Markdown escapes the whole document). Every CBOM string interpolated into report, wave, context and
+  delta Markdown is made inert: no line break, control byte or terminal escape, table-cell separator, raw HTML,
+  link target, backslash escape or code span. Machine outputs (`summary.json`, the MCP server) keep the
+  values as they are.
+
+### Added
+- CBOM property `fedlin:kexConflict` (why a handshake's key-exchange group was not recorded) and the
+  placeholder value `unparsed-kex-group` for a key exchange the scan saw but could not read.
+- `fedlin:classicalOnlyOfferReduced` also names the groups an older client OpenSSL could not offer.
+- Ruleset canonical IDs: `kyber`, `dilithium`, `sphincs+` (pre-standard submissions), `ml-kem-ipd`,
+  `ml-dsa-ipd`, `slh-dsa-ipd` (2023 initial public drafts), `hybrid-ml-kem-512/768/1024` (ML-KEM hybrids in
+  unregistered pairings), `composite-ml-dsa-44/65/87` and `composite-ml-dsa-87-cnsa` (composite signatures),
+  `srp` (SRP key exchange). The verdict table includes common spellings that map to them; a spelling it does
+  not list reads as unknown there.
+
+### Fixed
+- The classical-only probe offered no brainpool group, no FFDHE above 3072 bits and no legacy TLS 1.2 curve,
+  and enumeration no brainpool group, so a server accepting only those passed `refuses-classical-only` and
+  read as not exposed. The probe now offers every classical TLS 1.3 group OpenSSL 3.5 implements, the TLS 1.2
+  brainpool curves and the legacy TLS 1.2 curves the probe OpenSSL accepts; enumeration offers the brainpool
+  groups. A FIPS-mode client adds FFDHE 4096 to 8192 and P-224. A client OpenSSL that lacks some names (3.0
+  and 3.1: the brainpool TLS 1.3 groups) offers the rest, X25519 and X448 included, instead of falling back to
+  the FIPS subset. Enumeration records a TLS 1.3 FFDHE group from the DH size.
+- Ruleset 1.0.4 (details and sources in [CORRECTIONS.md](CORRECTIONS.md)): pre-standard Kyber, Dilithium,
+  SPHINCS+ and the FIPS 203/204/205 initial public drafts are no longer read as the standards; SLH-DSA is
+  recognized in its prefixed and pre-hash spellings and only for FIPS 205 parameter sets; no post-quantum name
+  can fall through to the classical DSA token; PSK and SRP suites are judged by every component (SRP is a
+  quantum-vulnerable key exchange); ML-KEM hybrids and composite ML-DSA signatures are judged as hybrids,
+  not by their post-quantum half alone; nonsense parameter sets such as `mlkem10240` are unknown; FN-DSA in
+  every variant is FN-DSA, not DSA; RSA-SHA1, rsa_pkcs1_sha1, ecdsa_sha1 and RSA-MD5 are Critical; SSH
+  group-exchange and certificate host-key names keep the observed key size; brainpool group names are ECDH
+  key exchange and are in the verdict table; the scan's placeholder names sit in their lane.
+- README: examples pinned 1.0.0 (now 1.4.0); the SLH-DSA release ledger is planned without a version; the
+  stale known limit that the hosted quick check does not read the verdict table is removed.
+
+### Changed
+- The release workflow tells fedlin.com that a new verdict table is published (a POST to `/api/pqc-scan/` with a
+  shared secret). fedlin.com/scan and the MCP hub then judge with the new ruleset; if the call fails they keep
+  their last good table. Pre-releases do not trigger it.
+
 ## [1.3.0] - 2026-11-16
 
 ### Added
@@ -121,7 +182,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.0.0...v1.1.0

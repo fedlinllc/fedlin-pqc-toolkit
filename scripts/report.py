@@ -18,8 +18,10 @@ Usage:  python3 report.py --cbom out/cbom.json --out out/cbom.report.md [--json 
 """
 import argparse
 import datetime
+import html
 import json
 import os
+import re
 import sys
 
 
@@ -39,6 +41,51 @@ import cmvp as _cmvp  # FIPS 140-3 (CMVP) candidates from the dated snapshot in 
 import evidence as _ev  # how each CBOM record was observed (CycloneDX component evidence)
 
 PRIORITY_ORDER = {"Critical": 0, "High": 1, "Low": 2, "None": 3, "Review": 4}
+
+# Characters that would let a CBOM string change the Markdown around it (GHSA-gmv4-8882-x388): a line break or a
+# table-cell separator, raw HTML, a link target, a code span, a backslash escape. Names in a CBOM can be chosen by a
+# scanned server (certificate subjects) or by whoever wrote a merged CBOM (--merge-cbom), so none of them is
+# trusted. A pipe becomes the entity rather than "\|" because the same strings are also parsed as JSON here
+# (cnsa2:config). Terminal escape sequences and other control bytes are removed first.
+_MD_UNSAFE = (("\\", "\\\\"), ("\r", " "), ("\n", " "), ("\t", " "), ("|", "&#124;"), ("<", "&lt;"),
+              (">", "&gt;"), ("](", "]&#40;"), ("`", "&#96;"))
+_CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def md_text(v):
+    """A CBOM string made inert in Markdown: one line, no control bytes, no cell separator, no raw HTML, no link
+    target, no backslash escape."""
+    s = _CONTROL.sub("", str(v))
+    for a, b in _MD_UNSAFE:
+        s = s.replace(a, b)
+    return s
+
+
+def md_code(v):
+    """An inert string (md_text) for use inside a `code span`: the characters shown as written, the backtick and
+    the table-cell separator still neutralised."""
+    s = html.unescape(str(v)).replace("\\\\", "\\")
+    # Unescaping can turn an entity the CBOM carried as text (&#10;, &#13;) back into a line break or control
+    # byte, so those are removed again after it: the span must stay on one line.
+    s = _CONTROL.sub("", s)
+    for a, b in (("\r", " "), ("\n", " "), ("\t", " ")):
+        s = s.replace(a, b)
+    return s.replace("`", "'").replace("|", "\\|")
+
+
+def _inert(o):
+    """Every string in a CBOM (values, not keys) through md_text, for building the report Markdown from it. A
+    JSON-valued property (cnsa2:config) is made inert inside, so it still parses."""
+    if isinstance(o, dict):
+        if o.get("name") == "cnsa2:config" and isinstance(o.get("value"), str):
+            try:
+                return {"name": "cnsa2:config", "value": json.dumps(_inert(json.loads(o["value"])))}
+            except ValueError:
+                pass
+        return {k: _inert(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_inert(v) for v in o]
+    return md_text(o) if isinstance(o, str) else o
 
 
 def load(path):
@@ -171,8 +218,10 @@ def score_summary(bom, regime=None):
     profiles = sorted({a["profile"] for a in algos if a.get("profile")})
     tls = [c for c in bom.get("components", [])
            if any(p.get("name") == "pkic:profile:interfaceType" for p in c.get("properties", []))]
+    # not observed: declared unknown, or a group the scan could not read (unparsed-kex-group, fedlin:kexConflict)
     kex_unobserved = [c["name"] for c in tls
-                      if any(p.get("name") == "pkic:profile:disclosure:keyExchange" and p.get("value") == "unknown"
+                      if any((p.get("name") == "pkic:profile:disclosure:keyExchange" and p.get("value") == "unknown")
+                             or (p.get("name") == "pkic:profile:keyExchange" and p.get("value") == "unparsed-kex-group")
                              for p in c.get("properties", []))]
     return {"interfaces": len(tls), "kex_unobserved": kex_unobserved, "score": score, "resistant": resistant, "compliant": compliant, "transitional": transitional,
             "vuln": vuln, "review": review, "scored": scored, "lanes": lanes,
@@ -496,6 +545,17 @@ def _findings_table(vuln, review, resistant, cap, profile):
 
 
 def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None, attention=None):
+    """(Markdown report, summary). The Markdown is built from a copy of the CBOM whose every string is inert
+    (md_text), so no CBOM string can change its structure; the summary is built from the CBOM as is, so machine
+    outputs (summary.json, the MCP server) keep the values unaltered."""
+    kw = dict(self_serve=self_serve, brand=brand, signed=signed, attestation_name=attestation_name,
+              attention=attention)
+    md, _ = _build_report(_inert(bom), **kw)
+    _, summary = _build_report(bom, **kw)
+    return md, summary
+
+
+def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None, attention=None):
     mp = meta_props(bom)
     sysname = bom.get("metadata", {}).get("component", {}).get("name", "system")
     ts = bom.get("metadata", {}).get("timestamp", "")
@@ -546,8 +606,17 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     L.append("")
     if incomplete:
         L.append(f"> **Incomplete: key exchange not observed on {len(incomplete)} of {s['interfaces']} TLS "
-                 "endpoint(s).** The score is partial and carries no grade. A FIPS-mode OpenSSL cannot offer "
-                 "post-quantum key exchange; run `./setup.sh` to build the probe image, then scan again.")
+                 "endpoint(s).** The score is partial and carries no grade. Either the key exchange could not be "
+                 "read (a group the scan does not know, or one the enumeration contradicted: listed below if so), "
+                 "or the scan host could not offer it: a FIPS-mode OpenSSL cannot offer post-quantum key "
+                 "exchange, so run `./setup.sh` to build the probe image, then scan again.")
+        L.append("")
+    conflicts = [(c.get("name", "TLS session"), p.get("value")) for c in bom.get("components", [])
+                 for p in c.get("properties", []) or [] if p.get("name") == "fedlin:kexConflict"]
+    if conflicts:
+        L.append(f"> **Key exchange not recorded on {len(conflicts)} endpoint(s) because the scan's observations "
+                 "contradict each other** (for example a load balancer with backends configured differently):")
+        L += [f"> - {name}: {note}" for name, note in conflicts]
         L.append("")
 
     # ---- bottom line up front (full report only; self-serve leads with its own disclaimer) ----
@@ -911,7 +980,7 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
         L.append("| Detection | Type | Location(s) |")
         L.append("|---|---|---|")
         for it in sorted(secrets, key=lambda x: x["name"]):
-            loc = ", ".join(f"`{p}`" for p in it["locations"]) or "-"
+            loc = ", ".join(f"`{md_code(p)}`" for p in it["locations"]) or "-"
             L.append(f"| {it['name']} | {it['type']} | {loc} |")
         L.append("")
         L.append("*Recommended: verify each, rotate any live credential, remove from tracked files, and scrub git "
@@ -1104,14 +1173,46 @@ def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestatio
     return md, summary
 
 
-def md_to_html(md_text, title="PQC Readiness Report"):
-    """Convert the report markdown to a self-contained HTML document for Drive upload."""
+_SAFE_SCHEMES = ("http", "https", "mailto")
+
+
+def _safe_url(u):
+    """True for a relative URL or an http(s)/mailto one; javascript:, data: and the rest are dropped."""
+    u = re.sub(r"[\x00-\x20\x7f]", "", html.unescape(u or ""))
+    m = re.match(r"([A-Za-z][A-Za-z0-9+.-]*):", u)
+    return not m or m.group(1).lower() in _SAFE_SCHEMES
+
+
+def md_to_html(md, title="PQC Readiness Report"):
+    """Convert the report markdown to a self-contained HTML document for Drive upload.
+
+    Safe for any input (GHSA-gmv4-8882-x388): raw HTML in the Markdown is not passed through (it is shown as text),
+    link and image targets other than http(s), mailto and relative ones are removed, and the fallback without
+    Python-Markdown escapes everything."""
     try:
         import markdown as mdlib
-        body = mdlib.markdown(md_text, extensions=["tables", "nl2br"])
     except ImportError:
-        # Fallback: wrap raw markdown in a <pre>: better than broken tables
-        body = f"<pre>{md_text}</pre>"
+        mdlib = None
+    if mdlib is None:
+        # Fallback: the Markdown as escaped text in a <pre> (better than broken tables)
+        body = f"<pre>{html.escape(md)}</pre>"
+    else:
+        conv = mdlib.Markdown(extensions=["tables", "nl2br"])
+        conv.preprocessors.deregister("html_block")
+        conv.inlinePatterns.deregister("html")
+
+        class _DropUnsafeUrls(mdlib.treeprocessors.Treeprocessor):
+            def run(self, root):
+                amp = getattr(mdlib.util, "AMP_SUBSTITUTE", "")
+                for el in root.iter():
+                    for attr in ("href", "src"):
+                        v = el.get(attr)
+                        if v is not None and not _safe_url(v.replace(amp, "&") if amp else v):
+                            del el.attrib[attr]
+
+        conv.treeprocessors.register(_DropUnsafeUrls(conv), "fedlin_drop_unsafe_urls", -1)  # after unescape
+        body = conv.convert(md)
+    title = html.escape(_CONTROL.sub("", title).replace("\n", " ").replace("\r", " "))
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <title>{title}</title>

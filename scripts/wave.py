@@ -233,7 +233,8 @@ class Scan:
                   "untested": split("fedlin:untestedGroups")} if complete else None
         seen = set()
         if iface:
-            if "pkic:profile:keyExchange" in p:
+            # an unreadable or contradicted key exchange (unparsed-kex-group, fedlin:kexConflict) is not observed
+            if "pkic:profile:keyExchange" in p and not kex_unreadable(iface):
                 seen.add("key-establishment")
             if "pkic:profile:encryption" in p:
                 seen |= {"symmetric", "hash", "kdf"}
@@ -333,6 +334,16 @@ def _mlkem_meets(group, profile):
     return "1024" in n if profile == "nss" else True
 
 
+UNPARSED_KEX = "unparsed-kex-group"  # tier2_pipeline.UNPARSED_GROUP
+
+
+def kex_unreadable(iface):
+    """True when the interface's key exchange is a placeholder or contradicted by the enumeration."""
+    props = (iface or {}).get("properties", []) or []
+    return any(isinstance(x, dict) and ((x.get("name") == "pkic:profile:keyExchange" and x.get("value") == UNPARSED_KEX)
+                                        or x.get("name") == "fedlin:kexConflict") for x in props)
+
+
 def _classical_group(g):
     return "mlkem" not in re.sub(r"[^a-z0-9]", "", g.lower())
 
@@ -364,6 +375,9 @@ def check_item(it, scan, profile):
     if kind == "mlkem":
         kex = [str(x.get("value")) for x in (iface or {}).get("properties", []) or []
                if isinstance(x, dict) and x.get("name") == "pkic:profile:keyExchange"]
+        if kex_unreadable(iface) and it.get("mode", "negotiates") == "negotiates":
+            return not_observed("the key exchange could not be read or contradicted the enumeration ("
+                                + ", ".join(kex) + ")")
         if any(_mlkem_meets(v, profile) for v in kex):
             return dict(base, status="pass", detail="ML-KEM negotiated: " + ", ".join(kex))
         if it.get("mode", "negotiates") == "accepts":
@@ -576,8 +590,28 @@ def check(wave_path, cbom_path, baseline_path=None):
     }
 
 
+# Wave files, endpoints and CBOM names are not trusted to leave the Markdown alone (GHSA-gmv4-8882-x388): no line
+# break, table-cell separator, raw HTML, link target or code span (as report.md_text; a pipe is escaped as "\|",
+# which GFM and Python-Markdown tables both read as text).
+_MD_UNSAFE = (("\\", "\\\\"), ("\r", " "), ("\n", " "), ("|", "\\|"), ("<", "&lt;"), (">", "&gt;"), ("](", "]&#40;"),
+              ("`", "&#96;"))
+
+
+_CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def md_text(v):
+    """A string made inert in Markdown: one line, no control bytes, no cell separator, no raw HTML, no link
+    target."""
+    s = _CONTROL.sub("", str(v)).replace("\t", " ")
+    for a, b in _MD_UNSAFE:
+        s = s.replace(a, b)
+    return s
+
+
 def markdown(result):
-    L = [f"## Migration wave check: {result['wave'] or 'wave'}", ""]
+    m = md_text
+    L = [f"## Migration wave check: {m(result['wave'] or 'wave')}", ""]
     s = result["summary"]
     verdict = "**Passed.**" if result["passed"] else "**Not passed.**"
     L.append(f"{verdict} {s['pass']} of {s['items']} item(s) passed, {s['fail']} failed, "
@@ -587,14 +621,14 @@ def markdown(result):
              "this scan itself observed; where it could not see, the item is \"not observed\".")
     L += ["", "| Item | Endpoint | Check | Result | Detail |", "|---|---|---|---|---|"]
     for i in result["items"]:
-        L.append(f"| {i['id']} | {i['endpoint']} | {i['check']} | {i['status']} | {i['detail']} |")
+        L.append(f"| {m(i['id'])} | {m(i['endpoint'])} | {m(i['check'])} | {m(i['status'])} | {m(i['detail'])} |")
     if result["regressions"]:
         L += ["", "Regressions (Critical or High findings at these endpoints, new or worse than in the baseline):", ""]
-        L += [f"- {r['endpoint']}: {r['name']} ({r['lane']}, {r['status']}, {r['priority']})"
+        L += [f"- {m(r['endpoint'])}: {m(r['name'])} ({m(r['lane'])}, {m(r['status'])}, {m(r['priority'])})"
               for r in result["regressions"]]
     if result.get("notCompared"):
         L += ["", "Not compared with the baseline (no regression can be claimed or ruled out here):", ""]
-        L += [f"- {n['endpoint']}: {', '.join(n['lanes'])} ({n['reason']})" for n in result["notCompared"]]
+        L += [f"- {m(n['endpoint'])}: {m(', '.join(n['lanes']))} ({m(n['reason'])})" for n in result["notCompared"]]
     L.append("")
     return "\n".join(L)
 

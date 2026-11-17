@@ -368,7 +368,8 @@ def rank(context_path, cbom_path, profile="civilian", redact=()):
 
 
 def _cell(v):
-    return str(v).replace("|", "\\|").replace("\n", " ")
+    """Context-file and CBOM strings made inert in Markdown (GHSA-gmv4-8882-x388), as wave.md_text."""
+    return wavemod.md_text(v)
 
 
 def markdown(att):
@@ -402,19 +403,22 @@ def markdown(att):
                  "configuration scan, or a CBOM from before toolkit 1.1), so nothing could be ranked.")
     else:
         L.append("No scanned endpoint matched a system in the context file, so nothing could be ranked.")
+    c = _cell
     if att["missingDataLifetime"]:
-        L += ["", "No data lifetime given for: " + ", ".join(att["missingDataLifetime"])
+        L += ["", "No data lifetime given for: " + ", ".join(c(x) for x in att["missingDataLifetime"])
               + ". Their urgency is not assessed."]
     if att["missingMigrationTime"]:
-        L += ["", "No migration time given for: " + ", ".join(att["missingMigrationTime"])
+        L += ["", "No migration time given for: " + ", ".join(c(x) for x in att["missingMigrationTime"])
               + ". Their urgency uses the data lifetime alone and may be understated."]
     if att["noContext"]:
         L += ["", "No context (no system pattern matches): "
-              + ", ".join(f"{u['endpoint']} ({u['worstPriority'] or 'no findings'})" for u in att["noContext"]) + "."]
+              + ", ".join(f"{c(u['endpoint'])} ({c(u['worstPriority'] or 'no findings')})" for u in att["noContext"])
+              + "."]
     if att["unusedSystems"] and (att["endpoints"] or att["noContext"]):
-        L += ["", "Systems with no scanned endpoint (check their patterns): " + ", ".join(att["unusedSystems"]) + "."]
+        L += ["", "Systems with no scanned endpoint (check their patterns): "
+              + ", ".join(c(x) for x in att["unusedSystems"]) + "."]
     if att["notRanked"]:
-        L += ["", "Not ranked: " + ", ".join(f"{n['endpoint']} ({n['reason']})" for n in att["notRanked"]) + "."]
+        L += ["", "Not ranked: " + ", ".join(f"{c(n['endpoint'])} ({c(n['reason'])})" for n in att["notRanked"]) + "."]
     L.append("")
     return "\n".join(L)
 

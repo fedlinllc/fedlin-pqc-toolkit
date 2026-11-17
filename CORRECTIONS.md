@@ -4,6 +4,34 @@ Every change to a verdict, a cited date or a public claim is recorded here with 
 wrong, what it is now, and the source that settled it. Verdicts come from `scripts/cnsa20_ruleset.py`;
 each rule cites a source key defined in `SOURCES` in that file.
 
+## 2026-11-16: ruleset 1.0.4 (pressure test of v1.3.0)
+
+| Identifier | Was (1.0.3) | Now (1.0.4) | Source |
+|---|---|---|---|
+| `kyber512`, `kyber768`, `kyber1024`, `kyber`, Kyber hybrids such as `p256_kyber768` | Read as ML-KEM (`kyber1024` compliant under nss); `p256_kyber768` as an EC key, High | Pre-standard Kyber: quantum-resistant, not FIPS 203, transitional (Low) under both profiles, as `X25519Kyber768Draft00` already was | FIPS203 (Appendix C, differences from the CRYSTALS-KYBER submission) |
+| `dilithium2`, `dilithium3`, `dilithium5`, `dilithium` | Read as ML-DSA (`dilithium5` compliant under nss) | Pre-standard Dilithium: not FIPS 204, transitional (Low) | FIPS204 (Appendix D, differences from the CRYSTALS-DILITHIUM submission) |
+| SPHINCS+ names (`SPHINCS+-Haraka-128f-robust`, `SPHINCS+-SHA2-128s-simple`, `sphincsplus`) | SLH-DSA, compliant (civilian) | Pre-standard SPHINCS+: not FIPS 205, transitional (Low) | FIPS205 (Section 11 and Appendix A: only the simple SHA2 and SHAKE parameter sets are approved) |
+| Any name containing "slh" (e.g. `english-slh`, `xslh-dsa-128s`) | SLH-DSA, compliant (civilian) | Unknown (Manual review) unless "SLH-DSA" stands as its own word | FIPS205 |
+| SLH-DSA names with a prefix (`id-alg-slh-dsa-sha2-128s`, `CKM_SLH_DSA`, `CKK_SLH_DSA`, `OpenSSL SLH-DSA-SHA2-128s`) or a pure / pre-hash suffix (`-pure`, `:prehash`, HashSLH-DSA such as `SLH-DSA-SHA2-128s-SHA512` or `...-with-SHA256`, with a FIPS-approved hash or XOF) | SLH-DSA, compliant (civilian) | Unchanged: SLH-DSA | FIPS205 (Sections 10.2 and 11) |
+| `SLH-DSA-SHA2-128`, `SLH-DSA-SHAKE-256` and other names with a security category but no `s`/`f` | `slh-dsa` | `slh-dsa-128` / `slh-dsa-256` (the category is kept; same status) | FIPS205 |
+| SLH-DSA names with any other suffix (`SLH-DSA-SHA2-128s-v2`, a pre-hash with MD5 or SHA-1) | SLH-DSA, compliant (civilian) | Unknown (Manual review): not a FIPS 205 parameter set or pre-hash | FIPS205 |
+| Names marked as the 2023 initial public drafts (`ML-KEM-1024-ipd`, `MLKEM1024-IPD`, `ML-DSA-65-ipd`, `SLH-DSA-...-ipd`) | The final standard's verdict (e.g. ML-KEM-1024 compliant under nss) | Pre-standard: quantum-resistant, not FIPS 203/204/205, transitional (Low) under both profiles | FIPS203 (Appendix C.2), FIPS204 (Appendix D.3), FIPS205 (Appendix A.1) |
+| Composite signatures (`MLDSA87-ECDSA-P384-SHA512`, `MLDSA87-Ed448`, `MLDSA65-RSA3072-PSS-SHA512`, ...) | Pure ML-DSA (the classical half dropped) | Judged as composites, like the ML-KEM hybrids: compliant under civilian as far as the ML-DSA half is; under nss only ML-DSA-87 with ECDSA P-384 or RSA of at least 3072 bits (so `MLDSA87-Ed448` and the brainpool composite become transitional); marked pre-standard (an Internet-Draft) | LAMPS-COMPOSITE, FIPS204, CNSA2 |
+| Composite and HashML-DSA names with a SHA-1 or MD5 hash (`MLDSA87-ECDSA-P384-SHA1`, `id-hash-ml-dsa-65-with-sha1`), and names where "rsa" is only part of a word (`ML-DSA-87 universal`) | Judged by the ML-DSA part alone (compliant, under nss too for ML-DSA-87); the word read as an RSA half | SHA-1/MD5: Unknown (Manual review); FIPS 204 pre-hashing and the composite draft need an approved hash. "rsa" counts only where it starts a word | FIPS204, LAMPS-COMPOSITE, IR8547 |
+| Any name with an ML-KEM, ML-DSA or SLH-DSA token that is not a recognized form (e.g. `mldsa870-dsa`, `slh-dsa-x`) | Could reach the "dsa" family token (DSA, Critical) | Unknown (Manual review): a post-quantum name never falls through to a classical token | FIPS203, FIPS204, FIPS205 |
+| `PSK-AES256-CBC-SHA` and other PSK suites | Judged by the cipher alone (compliant under nss); `DHE-PSK-*` / `RSA-PSK-*` with ARIA or Camellia transitional | Every component: HMAC-SHA-1 makes `PSK-AES256-CBC-SHA` transitional under nss; DHE, ECDHE and RSA key transport in PSK suites are quantum-vulnerable (High) | CNSA2, SP800-131A, IR8547 |
+| `SRP-AES-256-CBC-SHA` and other SRP suites | Judged by the cipher alone (compliant) | SRP key exchange (RFC 5054, over a finite-field Diffie-Hellman group): quantum-vulnerable, High | RFC5054, IR8547 (Table 4) |
+| `X25519MLKEM1024`, `SecP256r1MLKEM1024`, `secp256r1_mlkem1024`, `p521_mlkem1024`, `mlkem1024x448-sha512` | Pure ML-KEM-1024, compliant under nss (the classical half was dropped) | A hybrid: quantum-resistant, compliant under civilian; under nss compliant only for the registered P-384 pairings (`SecP384r1MLKEM1024`, `mlkem1024nistp384-sha384`), as `X448MLKEM1024` already was | FIPS203, CNSA2, TLS-MLKEM |
+| `mlkem10240`, `MLKEM768-1024`, `mldsa870` | ML-KEM-1024 / ML-KEM-768 / ML-DSA-87, compliant | Unknown (Manual review): a parameter set must end where the name says it does | FIPS203, FIPS204 |
+| `FN-DSA-512`, `FN-DSA-1024`, `id-fn-dsa-512`, `FN-DSA-1024-padded`, `fn-dsa-512-prehash`; Falcon hybrids such as `p256_falcon512` | DSA, Critical (the "dsa" token); the hybrids EC, High | FN-DSA, as `Falcon-512` already was: quantum-resistant, standard not final, transitional (Low) | FN-DSA |
+| `RSA-SHA1`, `rsa-sha1`, `rsa_pkcs1_sha1`, `ecdsa_sha1`, `RSA-MD5` | High (the hash was dropped) | Critical: SHA-1 and MD5 signatures are disallowed, as `sha1WithRSAEncryption` and `ecdsa-with-SHA1` already were | SP800-131A |
+| `diffie-hellman-group-exchange-sha256`, `rsa-sha2-512-cert-v01@openssh.com` and other SSH names with an observed size | The observed size was dropped: 1024 bits read High | The observed size counts: below 2048 bits is Critical, as plain `rsa-sha2-512` already was | SP800-57, SP800-131A, RFC9142 |
+| `brainpoolP256r1tls13`, `brainpoolP384r1tls13`, `brainpoolP512r1tls13` | Not in the verdict table (unknown to consumers) | TLS 1.3 key-exchange groups: ECDH, quantum-vulnerable, High (non-NIST curve noted) | IR8547 |
+| `brainpoolP256r1`, `brainpoolP384r1`, `brainpoolP512r1` (TLS 1.2 groups, and OpenSSL's name for the TLS 1.3 key exchange) | EC public key, public-key lane | ECDH key exchange, key-establishment lane; still quantum-vulnerable, High. Brainpool names now carry standard status non-NIST | IR8547 |
+| `unparsed-kex-group`, `unparsed-public-key-algorithm` (names the scan writes for what it saw but could not read) | Unknown, no lane | Unknown (Manual review) in the key-establishment / public-key lane, so a check of that lane counts them | n/a |
+
+FN-DSA stays transitional because FIPS 206 is not final; when it is, its verdict will change here with that source.
+
 ## 2026-11-15: ruleset 1.0.3 (pressure test and competitive benchmark)
 
 | Identifier | Was (1.0.2) | Now (1.0.3) | Source |

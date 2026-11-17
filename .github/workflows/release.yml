@@ -106,3 +106,19 @@ jobs:
           } >> notes.md
           pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease";; esac   # v1.2.3-rc.1 -> pre-release
           gh release create "$GITHUB_REF_NAME" --verify-tag $pre --title "$GITHUB_REF_NAME" --notes-file notes.md dist/*
+      # fedlin.com/scan and the MCP hub read verdicts.json from the latest release. Tell them it changed (an
+      # event; nothing polls). The site fetches and validates the new table and keeps its last good copy if
+      # anything fails, so a failure here is a warning, not a failed release. Pre-releases are not "latest".
+      - name: Tell fedlin.com a new verdict table is published
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          REFRESH_SECRET: ${{ secrets.VERDICT_TABLE_REFRESH_SECRET }}
+        run: |
+          if [ -z "$REFRESH_SECRET" ]; then
+            echo "::warning::VERDICT_TABLE_REFRESH_SECRET is not set; fedlin.com keeps its last good verdict table"
+            exit 0
+          fi
+          code=$(curl -sS -o refresh.json -w '%{http_code}' --max-time 30 -X POST \
+                 -H "Authorization: Bearer $REFRESH_SECRET" https://fedlin.com/api/pqc-scan/ || echo 000)
+          echo "fedlin.com refresh: HTTP $code $(cat refresh.json 2>/dev/null)"
+          [ "$code" = "200" ] || echo "::warning::fedlin.com did not take the new verdict table (HTTP $code); it keeps its last good copy"

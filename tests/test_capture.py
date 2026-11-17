@@ -8,6 +8,10 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
 import tier2_pipeline as tp  # noqa: E402
 
+# An ML-KEM group counts only with the TLS 1.3 summary of the same handshake (1.4.0, GHSA-62fw-vjj2-r4p2), so the
+# fixtures carry the summary lines OpenSSL 3.5 prints after the group line.
+TLS13 = "\n---\nNew, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384\nProtocol: TLSv1.3\n---\n"
+
 
 class Capture(unittest.TestCase):
     def test_host_validation(self):
@@ -22,7 +26,7 @@ class Capture(unittest.TestCase):
 
     def test_parse_kex_group_openssl_formats(self):
         cases = {
-            "Negotiated TLS1.3 group: X25519MLKEM768": "X25519MLKEM768",
+            "Negotiated TLS1.3 group: X25519MLKEM768" + TLS13: "X25519MLKEM768",
             "Negotiated TLS1.3 group: <NULL>\nPeer Temp Key: ECDH, prime256v1, 256 bits": "prime256v1",
             "Server Temp Key: X25519, 253 bits": "X25519",
             "Peer Temp Key: DH, 2048 bits": "DH",
@@ -46,7 +50,7 @@ class Capture(unittest.TestCase):
 
     def test_fips_subset_pqc_result_is_definitive(self):
         outs = iter(["Call to SSL_CONF_cmd(-groups, X25519MLKEM768) failed",
-                     "Negotiated TLS1.3 group: SecP256r1MLKEM768"])
+                     "Negotiated TLS1.3 group: SecP256r1MLKEM768" + TLS13])
         with mock.patch.object(tp, "run", side_effect=lambda cmd, timeout=25: next(outs)), \
              mock.patch.object(tp, "_default_probe_image", return_value=""), \
              mock.patch.dict("os.environ", {"FEDLIN_KEX_PROBE_IMAGE": ""}):
@@ -64,7 +68,7 @@ class Capture(unittest.TestCase):
 
     def test_fips_host_uses_bundled_probe_openssl_first(self):
         outs = iter(["Call to SSL_CONF_cmd(-groups, X25519MLKEM768) failed",
-                     "Negotiated TLS1.3 group: X25519MLKEM768"])
+                     "Negotiated TLS1.3 group: X25519MLKEM768" + TLS13])
         cmds = []
         def fake_run(cmd, timeout=25):
             cmds.append(cmd)

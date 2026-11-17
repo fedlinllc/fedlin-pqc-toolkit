@@ -34,10 +34,15 @@ INSUFFICIENT = ("CONNECTED(00000003)\n40F7:error:0A00042F:SSL routines::tlsv1 al
 FIPS_REFUSAL = "Call to SSL_CONF_cmd(-groups, X25519:secp256r1) failed"
 
 
-def _runner(outputs):
+def _runner(outputs, lacks=("X25519", "X448")):
+    """Fake run(): canned handshake outputs in order; the per-name group check against 127.0.0.1:9 refuses `lacks`
+    (a FIPS-mode OpenSSL by default)."""
     it = iter(outputs)
 
     def fake(cmd, timeout=25):
+        if "-connect 127.0.0.1:9 -groups " in cmd:
+            g = cmd.split("-groups ")[1].split()[0]
+            return f"Call to SSL_CONF_cmd(-groups, {g}) failed" if g in lacks else "connect:errno=111"
         return "OpenSSL 3.5.8" if cmd.endswith("version") else next(it)
     return fake
 
@@ -68,6 +73,7 @@ class Probe(unittest.TestCase):
 
     def probe(self, outputs):
         with mock.patch.object(tp, "run", side_effect=_runner(outputs)), \
+             mock.patch.dict(tp._GROUP_SUPPORT, clear=True), \
              mock.patch.object(tp, "_default_probe_image", return_value=""), \
              mock.patch.dict("os.environ", self.env):
             return tp._probe_classical_only("pq.example")

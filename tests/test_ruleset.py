@@ -37,7 +37,7 @@ CASES = [
     ("ideal-mode", None, "Review", "Review", None, None),
     ("ECMQV", None, "High", "High", True, "mqv"),
     ("ElGamal", None, "High", "High", True, "elgamal"),
-    ("brainpoolP256r1", None, "High", "High", True, "ec"),
+    ("brainpoolP256r1", None, "High", "High", True, "ecdh"),  # a TLS group (1.0.4)
     ("secp256k1", None, "High", "High", True, "ec"),
     ("Curve25519", None, "High", "High", True, "x25519"),
     ("EdDSA", None, "High", "High", True, "eddsa"),
