@@ -23,6 +23,25 @@ RUN apk add --no-cache openssl=3.5.9-r0 \
 
 # --- stage 2: final runtime: MINIMAL UBI9 node image (node+npm present, microdnf-based) ---
 FROM registry.access.redhat.com/ubi9/nodejs-22-minimal@sha256:0cc4ae118138dd07280d5abaa12b6a018e5bc82c048296f3c3676e62d3a1d8a8
+# Our own identity labels. Without them the image inherits the UBI base's name/vendor/maintainer (Red Hat),
+# which misstates who ships it and fails Red Hat's preflight trademark check. The release workflow passes
+# VERSION; local builds are labelled "dev".
+ARG VERSION=dev
+ARG RELEASE=1
+LABEL name="fedlin-pqc-toolkit" \
+      vendor="FEDLIN LLC" \
+      maintainer="FEDLIN LLC" \
+      version="${VERSION}" \
+      release="${RELEASE}" \
+      summary="Post-quantum cryptography readiness assessment toolkit" \
+      description="Builds a CycloneDX cryptographic bill of materials (CBOM) from repositories, clusters, hosts and TLS endpoints, then checks it against CNSA 2.0 and NIST IR 8547 timelines." \
+      url="https://github.com/fedlinllc/fedlin-pqc-toolkit" \
+      io.k8s.display-name="FEDLIN PQC Toolkit" \
+      io.k8s.description="Post-quantum cryptography readiness assessment: CBOM generation and CNSA 2.0 / NIST IR 8547 policy checks." \
+      io.openshift.tags="pqc,cbom,cyclonedx,cnsa,cryptography" \
+      help="https://github.com/fedlinllc/fedlin-pqc-toolkit#readme" \
+      io.openshift.expose-services="" \
+      io.s2i.scripts-url=""
 USER 0
 # cyclonedx-cli is a self-contained .NET binary; libicu + invariant mode satisfy its globalization needs
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
@@ -67,6 +86,20 @@ COPY scripts ./scripts
 COPY data ./data
 COPY third_party ./third_party
 COPY README.md ./
+# /licenses: our licence plus the licences of the third-party data we ship (Red Hat certification
+# requirement). The public tree has LICENSE at the root; the source tree keeps it in public/.
+RUN --mount=type=bind,target=/tmp/ctx \
+    mkdir -p /licenses \
+ && if [ -f /tmp/ctx/LICENSE ]; then src=/tmp/ctx/LICENSE; else src=/tmp/ctx/public/LICENSE; fi \
+ && cp "$src" /licenses/fedlin-pqc-toolkit.LICENSE \
+ && for d in third_party/*/; do cp "$d/LICENSE" "/licenses/third_party-$(basename "$d").LICENSE"; done \
+ && printf '%s\n' \
+      'fedlin-pqc-toolkit: Apache-2.0 (fedlin-pqc-toolkit.LICENSE).' \
+      'third_party-*.LICENSE: licences of the vendored CycloneDX, PKI Consortium and musl files.' \
+      'Bundled tools (each under its own licence): oc/kubectl (Apache-2.0), cyclonedx-cli (Apache-2.0),' \
+      'cdxgen (Apache-2.0), cbomkit-theia (Apache-2.0), OpenSSL 3.5 key-exchange probe (Apache-2.0),' \
+      'musl libc (MIT, third_party-musl.LICENSE). npm dependencies: licence files under' \
+      '/opt/toolkit/node_modules. UBI packages: see /usr/share/licenses.' > /licenses/README
 RUN mkdir -p /opt/toolkit/out && chmod -R a+rwX /opt/toolkit/out
 
 ENV PATH="/opt/toolkit/node_modules/.bin:${PATH}"

@@ -11,6 +11,18 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-18
+
+Ruleset 1.0.4 (unchanged). A packaging-only patch: no change to scanning, verdicts or output formats.
+
+### Changed
+- **Container image labels and licences.** The image now sets its own `name`, `vendor`, `maintainer`,
+  `version`, `release`, `summary`, `description`, `url` and `help` labels, and the release build sets the
+  build date and commit, so the UBI base image's values (which named Red Hat as vendor) no longer show. It
+  ships `/licenses` with the toolkit's licence, the vendored CycloneDX, PKI Consortium and musl licences and
+  an index of bundled tools. Red Hat `preflight` failed two checks on 1.4.0 (HasLicense,
+  HasNoProhibitedLabels) and passed the other nine; these changes address both.
+
 ## [1.4.0] - 2026-11-17
 
 Ruleset 1.0.4. Upgrade if you scan servers you do not control or render reports from CBOMs others produced. A
@@ -182,7 +194,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.1.0...v1.2.0

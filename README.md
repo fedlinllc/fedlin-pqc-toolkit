@@ -84,9 +84,9 @@ Or use the published container image, with nothing to install (pin it by the dig
 ```bash
 mkdir -p out
 podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 \
   --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
-# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 ...
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 ...
 ```
 
 ## Verify a release
@@ -96,8 +96,8 @@ and every file and the image carry Sigstore-signed SLSA build provenance that na
 (releases before 1.0.0 are tags only):
 
 ```bash
-gh attestation verify fedlin-pqc-toolkit-1.4.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
-gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify fedlin-pqc-toolkit-1.4.1.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 --repo fedlinllc/fedlin-pqc-toolkit
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
@@ -300,7 +300,7 @@ agent read-only tools over toolkit outputs in one folder you choose:
 python3 scripts/mcp_server.py --root ./out            # register this command in your MCP client
 # or from the image, with no network and the folder read-only:
 podman run -i --rm --network none -v "$PWD/out:/data:ro,Z" --entrypoint python3 \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.0 scripts/mcp_server.py --root /data
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 scripts/mcp_server.py --root /data
 ```
 
 The boundary is deliberate. **It never scans and makes no network connections**: you run scans yourself
