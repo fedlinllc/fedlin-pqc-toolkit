@@ -36,12 +36,16 @@ VALIDATOR = os.path.join(ROOT, "third_party", "pkic-cbom")
 DEADLINE = datetime.date(2030, 12, 31)
 FIPS_PQC = datetime.date(2024, 8, 13)      # FIPS 203, 204 and 205 published
 # Statuses that come from comparing an answer with the CBOM; date checks are reported separately
-CBOM_STATUSES = ("consistent", "contradicted", "not-evidenced", "not-checked", "unanswered", "no-cbom", "info")
+CBOM_STATUSES = ("consistent", "contradicted", "not-evidenced", "not-checked", "unanswered", "no-cbom", "info",
+                 "below-target")
+DATE_STATUSES = ("planned", "past", "implausible", "late", "missing-date")
+STATUSES = CBOM_STATUSES + DATE_STATUSES
 _HYBRID = re.compile(r"(mlkem|kyber).*(x25519|x448|secp|nistp|p256|p384|p521)|"
                      r"(x25519|x448|secp|nistp|p256|p384|p521).*(mlkem|kyber)", re.I)
 # A library that provides cryptography, by name, when it is not in the toolkit's known-library table
 _CRYPTO_LIB = re.compile(r"crypt|ssl|tls|sodium|nacl|bouncycastle|bcprov|bcpkix|noble|jose|jwt|openssl|"
-                         r"boringssl|wolfssl|mbedtls|gcrypt|gnutls|libnss|\bnss\b|aws-lc|botan|liboqs|oqs", re.I)
+                         r"boringssl|wolfssl|mbedtls|gcrypt|gnutls|libnss|\bnss\b|aws-lc|botan|liboqs|oqs|rustls|"
+                         r"^ring$|/ring$|jsrsasign|node-rsa|\brsa\b|ecdsa|ed25519|x509|pkcs|tink|cipher", re.I)
 
 
 _NIST_OIDS = {
@@ -56,6 +60,14 @@ _NIST_OIDS = {
     "2.16.840.1.101.3.4.3.28": "SLH-DSA-SHAKE-192s", "2.16.840.1.101.3.4.3.29": "SLH-DSA-SHAKE-192f",
     "2.16.840.1.101.3.4.3.30": "SLH-DSA-SHAKE-256s", "2.16.840.1.101.3.4.3.31": "SLH-DSA-SHAKE-256f",
 }
+# Common classical public-key OIDs, so an OID-only entry is judged rather than left unrecognised (1.6.0)
+_NIST_OIDS.update({
+    "1.2.840.113549.1.1.1": "rsaEncryption", "1.2.840.113549.1.1.10": "RSASSA-PSS",
+    "1.2.840.113549.1.1.7": "RSAES-OAEP", "1.2.840.10045.2.1": "id-ecPublicKey",
+    "1.2.840.10045.4.3.2": "ECDSA", "1.2.840.10045.4.3.3": "ECDSA", "1.2.840.10045.4.3.4": "ECDSA",
+    "1.3.132.1.12": "ECDH", "1.2.840.10046.2.1": "DH", "1.3.101.110": "X25519", "1.3.101.111": "X448",
+    "1.3.101.112": "Ed25519", "1.3.101.113": "Ed448",
+})
 
 
 def _all_components(comps):
@@ -81,7 +93,11 @@ def _algo_name(c, ap):
         return _NIST_OIDS[oid]
     ps = str(ap.get("parameterSetIdentifier") or "").strip()
     if ps and not re.search(r"\d", name) and re.fullmatch(r"[0-9A-Za-z]{1,8}", ps):
-        return f"{name}-{ps}"
+        # Only when the ruleset knows the joined name: for RSA and EC keys this field holds the key size, and
+        # "rsaEncryption-2048" is not a name the ruleset recognises (regression in 1.5.2, fixed in 1.6.0).
+        joined = f"{name}-{ps}"
+        if cnsa.classify(joined).get("canonical"):
+            return joined
     return name
 
 
@@ -235,7 +251,10 @@ def cbom_facts(bom, profile):
     meta = (bom.get("metadata", {}) or {}).get("component", {}) or {}
     coverage = next((p.get("value") for p in meta.get("properties", []) or []
                      if p.get("name") == "pkic:profile:coverage"), None)
+    other_libs = [c for c in libs if c not in crypto_libs]
     return {"coverage": coverage or "not declared",
+            "unrecognised": sorted({x["name"] or "(empty name)" for x in algos if not x["canonical"]}),
+            "other_libraries": sorted({(c.get("name") or "?") for c in other_libs}),
             "algorithms": algos, "certificates": certs, "protocols": protocols, "libraries": libs,
             "crypto_libraries": crypto_libs,
             "layers": sorted(layers | ({"protocol"} if protocols else set()) | ({"certificate"} if certs else set())),
@@ -309,8 +328,15 @@ def _complete(facts):
     return facts.get("coverage") == "complete"
 
 
-def _absence(facts, what):
-    """Status for a claim of absence that the CBOM does not contradict."""
+def _absence(facts, what, unknown=()):
+    """Status for a claim of absence that the CBOM does not contradict. Never "consistent" while the CBOM holds
+    entries this toolkit cannot classify: an unrecognised entry may be exactly what the answer denies (1.6.0)."""
+    unknown = sorted(set(unknown))
+    if unknown:
+        shown = ", ".join(unknown[:8]) + ("" if len(unknown) <= 8 else f" and {len(unknown) - 8} more")
+        return _r("not-evidenced", f"The CBOM shows {what} that this toolkit recognises, but it also lists entries "
+                                   f"the toolkit cannot classify ({shown}), so it cannot show the answer holds. "
+                                   "Ask the vendor what they are.")
     if _complete(facts):
         return _r("consistent", f"The CBOM, which declares complete coverage, shows {what}.")
     cov = _cov(facts)
@@ -388,7 +414,7 @@ def run_check(q, a, facts, ctx):
                                       + ".")
         if not libs:
             if claimed is False:
-                return _absence(facts, "no cryptographic library")
+                return _absence(facts, "no cryptographic library", facts.get("other_libraries", []))
             return _r("not-evidenced", "The CBOM lists no cryptographic library, so inherited cryptography cannot "
                                        "be checked.")
         return _r("consistent", f"The CBOM lists {len(libs)} cryptographic librar(ies)"
@@ -405,6 +431,10 @@ def run_check(q, a, facts, ctx):
         names = ", ".join(sorted({x["name"] for x in vul})[:8])
         hybrids = sorted({x["name"] for x in algos if chk == "traditional_asymmetric" and not x["auth"]
                           and _HYBRID.search(x["name"] or "")})
+        if claimed is False and not vul and hybrids:
+            return _r("not-evidenced", f"Answer says none, but the CBOM shows hybrid key establishment "
+                                       f"({', '.join(hybrids[:6])}), whose classical half is traditional asymmetric "
+                                       "cryptography. Ask whether the answer counts it.")
         if claimed is True and not vul and hybrids:
             return _r("consistent", f"The CBOM shows hybrid key establishment ({', '.join(hybrids[:6])}), whose "
                                     "classical half is traditional asymmetric cryptography.")
@@ -420,7 +450,7 @@ def run_check(q, a, facts, ctx):
                                        "algorithm; the CBOM may be incomplete.")
         if vul:
             return _r("consistent", f"CBOM shows: {names}.")
-        return _absence(facts, "no quantum-vulnerable algorithm")
+        return _absence(facts, "no quantum-vulnerable algorithm", facts.get("unrecognised", []))
     if chk == "hybrid":
         hyb = sorted({x["name"] for x in algos if _HYBRID.search(x["name"] or "")
                       or (x["canonical"] and _HYBRID.search(x["canonical"]))})
@@ -436,7 +466,7 @@ def run_check(q, a, facts, ctx):
         if claimed is None:
             return _unclaimed(a, f"The CBOM shows hybrid key establishment: {', '.join(hyb)}.")
         if claimed is False:
-            return _absence(facts, "no hybrid key establishment")
+            return _absence(facts, "no hybrid key establishment", facts.get("unrecognised", []))
         if hyb or claimed:
             if not plan:
                 return _r("missing-date", (f"Hybrid in use ({', '.join(hyb)}) " if hyb else "Hybrid supported ")
@@ -456,10 +486,12 @@ def run_check(q, a, facts, ctx):
         claimed = _list_claim(a, "pqc_algorithms")
         in_cbom = {}
         for x in algos:
-            if x["canonical"] and x["vulnerable"] is False and x["family"] in ("ML-KEM", "ML-DSA", "SLH-DSA", "LMS", "XMSS", "FN-DSA"):
+            # any recognised quantum-resistant public-key algorithm, including draft names such as Kyber768
+            if x["canonical"] and x["vulnerable"] is False and x["lane"] in ("key-establishment", "signature",
+                                                                              "public-key"):
                 in_cbom[x["canonical"]] = x
         rows = []
-        missing = []
+        missing, below = [], []
         for name in claimed:
             r = cnsa.classify(name, profile=ctx["profile"])
             if not r.get("canonical") or r.get("quantum_vulnerable") is not False:
@@ -469,6 +501,8 @@ def run_check(q, a, facts, ctx):
                 continue
             ok = (f"meets the `{ctx['profile']}` profile target" if r.get("priority") == "None"
                   else f"below the `{ctx['profile']}` profile target ({r.get('cnsa_target')})")
+            if r.get("priority") != "None":
+                below.append(name)
             want = r["canonical"].replace("-", "")
             hits = sorted(x["name"] for k, x in in_cbom.items() if want == k.replace("-", "") or want in k.replace("-", ""))
             if not hits:
@@ -487,15 +521,21 @@ def run_check(q, a, facts, ctx):
             tail = (f" `ga_date` = {_claim(a, 'ga_date')}, before NIST published FIPS 203/204/205 (August 2024): "
                     "ask what was generally available then.")
         if not claimed:
+            seen = (" The CBOM shows " + ", ".join(sorted({x["name"] for x in in_cbom.values()})) + ".") if in_cbom else ""
             if not _answered(a):
-                return _r("unanswered", "Not answered." + (" The CBOM shows " + ", ".join(sorted(in_cbom)) + "."
-                                                          if in_cbom else ""))
-            if in_cbom:
-                return _r("not-evidenced", "No algorithms listed in the answer, but the CBOM shows "
-                                           + ", ".join(sorted(in_cbom)) + "." + tail)
-            return _r("missing-date" if not ga else "info", "No PQC algorithms listed." + tail)
-        status = ("not-evidenced" if missing else "late" if ga and ga > DEADLINE
-                  else "missing-date" if bad else "implausible" if early else "consistent")
+                return _r("unanswered", "Not answered." + seen)
+            # answered in prose only: nothing to compare (1.6.0; was "not-evidenced")
+            return _r("not-checked", "The answer lists no algorithms in `pqc_algorithms`, so it was not compared "
+                                     "with the CBOM." + seen + tail)
+        future = bool(ga and ga > datetime.date.today())
+        if missing and future:
+            # not generally available yet: absence from today's CBOM is expected, not a gap (1.6.0)
+            rows.append(f"`ga_date` {_claim(a, 'ga_date')} is in the future, so algorithms not yet in the CBOM "
+                        "are a plan, not a gap")
+        status = ("late" if ga and ga > DEADLINE
+                  else "planned" if missing and future
+                  else "not-evidenced" if missing else "missing-date" if bad else "implausible" if early
+                  else "below-target" if below else "consistent")
         return _r(status, "; ".join(rows) + "." + tail)
     if chk == "library_validation":
         found = ctx.get("cmvp", [])
@@ -693,7 +733,8 @@ def report_md(res):
     if res["concerns"]:
         L += [f"- **{c}:** {d}" for c, d in res["concerns"]]
     else:
-        L.append("None raised from the structured answers.")
+        L.append("None of the publication's seven concerns was raised from the structured answers"
+                 + (" (the contradictions above are listed separately)." if contra else "."))
     L += ["", "The publication notes these concerns do not necessarily indicate unacceptable risk; weigh them "
               "against the vendor's risk level, data sensitivity and longevity, and willingness to engage.", ""]
     phase = None
@@ -746,9 +787,16 @@ def main(argv=None):
     s.add_argument("--profile", choices=list(cnsa.PROFILES), default=cnsa.DEFAULT_PROFILE)
     s.add_argument("--out", default="", help="report path (default: <answers>.report.md); a .summary.json is written beside it")
     s.add_argument("--fail-on", default="",
-                   help="comma-separated check statuses that make the exit code 1, e.g. contradicted,late "
-                        "(default: exit 0 whatever the checks found)")
+                   help="comma-separated check statuses that make the exit code 1, e.g. contradicted,late; an "
+                        "unknown status is an error (exit 2). Default: exit 0 whatever the checks found")
     a = ap.parse_args(argv)
+    fail = set()
+    if a.cmd == "assess":
+        fail = {x.strip().lower() for x in a.fail_on.split(",") if x.strip()}
+        bad = sorted(fail - set(STATUSES))
+        if bad:
+            sys.stderr.write(f"[error] --fail-on: unknown status {', '.join(bad)}; use any of {', '.join(STATUSES)}\n")
+            return 2
     doc = load_questions()
     if a.cmd == "questionnaire":
         with open(a.out, "w", encoding="utf-8") as f:
@@ -776,7 +824,6 @@ def main(argv=None):
         json.dump(s, f, indent=2)
     print(f"[ok] {out}: {s['answered']}/{s['questions']} answered; checks {s['checks']}; "
           f"contradicted {s['contradicted'] or 'none'}; concerns {len(s['concerns'])}")
-    fail = {x.strip() for x in a.fail_on.split(",") if x.strip()}
     hit = sorted(k for k, st in s["statuses"].items() if st in fail)
     if hit:
         print(f"[fail-on] {', '.join(hit)} have a status in --fail-on ({', '.join(sorted(fail))})")

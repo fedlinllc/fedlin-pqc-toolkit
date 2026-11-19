@@ -149,3 +149,27 @@ class Answers152(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Provenance160(unittest.TestCase):
+    """pqcmm_evidence labels a CBOM it did not produce as supplied, and records inputs (1.6.0)."""
+    def test_vendor_cbom_not_labelled_as_ours(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "vendor.json")
+        with open(p, "w") as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6",
+                       "metadata": {"tools": {"components": [{"name": "acme-cbom-gen", "version": "2"}]},
+                                    "component": {"name": "Acme", "properties": [
+                                        {"name": "pkic:profile:coverage", "value": "complete"}]}},
+                       "components": [{"type": "cryptographic-asset", "bom-ref": "a/1", "name": "ML-KEM-768",
+                                       "cryptoProperties": {"assetType": "algorithm"}}]}, f)
+        res = pe.build(p)
+        self.assertNotIn("produced by this toolkit", res["evidence"]["0.2.2"]["note"])
+        self.assertIn("acme-cbom-gen", res["evidence"]["0.2.2"]["note"])
+        j = pe.to_json(res)
+        self.assertFalse(j["assessedConfiguration"]["cbomProducedByToolkit"])
+        self.assertEqual(len(j["inputs"]["cbom"]["sha256"]), 64)
+        self.assertIn("toolkitVersion", j)
+        md = pe.report_md(res)
+        self.assertIn("SHA-256", md)
+        self.assertNotIn("declared partial", md)

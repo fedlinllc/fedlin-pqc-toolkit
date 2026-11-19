@@ -11,6 +11,36 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-19
+
+Ruleset 1.0.5 (unchanged). Includes everything in 1.6.0-rc.1 (two container images per ADR-066) and the fixes
+below, from the fedlin-website re-test of 1.5.2.
+
+### Fixed
+- **Vendor readiness: RSA and EC keys read as unrecognised (regression in 1.5.2).** A bare algorithm name took
+  the CBOM's `parameterSetIdentifier`, so `rsaEncryption` with key size `2048` became `rsaEncryption-2048`,
+  which the ruleset does not recognise, and an answer denying traditional asymmetric cryptography read
+  `consistent`. The toolkit's own CBOMs put the key size there. The parameter set is now joined only when the
+  joined name is one the ruleset knows (ML-KEM + 768 is still ML-KEM-768).
+- **Vendor readiness: a denial is never `consistent` while the CBOM lists entries the toolkit cannot classify.**
+  A1, A6, T3 and L4 denials give `not-evidenced` and name the unrecognised algorithms or libraries. More
+  libraries are recognised as cryptographic (ring, rustls, jsrsasign and others), and OID-only RSA, EC,
+  X25519/X448, Ed25519/Ed448 and DH entries are resolved.
+- Vendor readiness: an A1 denial with only hybrid key establishment in the CBOM is `not-evidenced` (the hybrid's
+  classical half is traditional asymmetric cryptography), not `consistent`.
+- Vendor readiness I1: Kyber768 and other draft names in the CBOM match the claim; an answer in prose only is
+  `not-checked`; algorithms not yet in the CBOM with a future `ga_date` are `planned`, not `not-evidenced`; a
+  claim that is in the CBOM but below the profile's target (ML-KEM-768 under `nss`) is the new status
+  `below-target`.
+- `vendor_readiness.py assess --fail-on` rejects an unknown status (exit 2) and ignores case.
+- The report says "none of the publication's seven concerns" rather than "none raised" when there are
+  contradictions.
+- `pqcmm_evidence.py`: a CBOM the toolkit did not produce is labelled as supplied (naming its generator), not as
+  "produced by this toolkit"; the component breakdown states the CBOM's declared coverage instead of always
+  "partial"; the report and JSON record the toolkit and ruleset versions and the SHA-256 of each input; date
+  statuses are not counted as CBOM checks.
+- `tier2_pipeline.py --help`: "ruleset profile", not "verdict profile".
+
 ## [1.6.0-rc.1] - 2026-11-19
 
 Ruleset 1.0.5 (unchanged). Release candidate: checks that both images build and that the certified one passes
@@ -348,7 +378,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0-rc.1...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0
 [1.6.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0-rc.1
 [1.5.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.0...v1.5.1

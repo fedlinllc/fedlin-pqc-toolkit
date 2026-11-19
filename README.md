@@ -90,9 +90,9 @@ FIPS-mode host use `fedlin-pqc-toolkit-probe`, see [FIPS-mode scan hosts](#fips-
 ```bash
 mkdir -p out
 podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.6.0 \
   --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
-# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 ...
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.6.0 ...
 ```
 
 ## Verify a release
@@ -102,8 +102,8 @@ and every file and the image carry Sigstore-signed SLSA build provenance that na
 (releases before 1.0.0 are tags only):
 
 ```bash
-gh attestation verify fedlin-pqc-toolkit-1.5.2.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
-gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify fedlin-pqc-toolkit-1.6.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.6.0 --repo fedlinllc/fedlin-pqc-toolkit
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
@@ -316,7 +316,7 @@ Register it with absolute paths (a client starts the server from its own working
 claude mcp add fedlin-pqc -- python3 -I /path/to/fedlin-pqc-toolkit/scripts/mcp_server.py --root /path/to/out
 # or from the image, with no network and the folder read-only:
 claude mcp add fedlin-pqc -- podman run -i --rm --network none -v /path/to/out:/data:ro,Z \
-  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 scripts/mcp_server.py --root /data
+  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.6.0 scripts/mcp_server.py --root /data
 ```
 
 Other clients (for example Claude Desktop's `claude_desktop_config.json`) take the same command as JSON:
@@ -418,7 +418,8 @@ cannot see the server's implementation. The snapshot is refreshed deliberately a
 `scripts/vendor_readiness.py` turns the 31 questions in *Post-quantum questions to ask your vendors*
 (ASD's ACSC with CISA and NSA, November 2026; (c) Commonwealth of Australia 2026, reproduced under CC BY 4.0
 with the attribution and changes stated in each output and in [NOTICE](NOTICE)) into a questionnaire, an answer
-template, and an assessment that checks a vendor's answers against the vendor's own CBOM:
+template, and an assessment that compares the yes/no and algorithm claims in a vendor's answers with the
+vendor's own CBOM, flagging any it contradicts or cannot show. It is a review aid, not a determination:
 
 ```bash
 python3 scripts/vendor_readiness.py questionnaire --out vendor-questions.md   # send to the vendor
@@ -429,33 +430,40 @@ python3 scripts/vendor_readiness.py assess --answers answers.json             # 
 Each question is typed. **Disclosure** answers (inventory, third-party cryptography, data flows and
 authentication on traditional asymmetric cryptography, hybrid use, PQC algorithms, library validation) are
 compared with the CBOM. **Capability** answers are recorded with their evidence and hold only for the version
-assessed. **Intent** answers (dates, roadmaps, licensing) are plans: they are never verified.
+assessed. **Intent** answers (dates, roadmaps) are plans and are never verified; I1 is an intent question whose
+algorithm list is compared with the CBOM and with the profile target, while its `ga_date` is reported as a date.
 
 How a comparison with the CBOM reads:
 
 | Status | Meaning |
 |---|---|
-| `consistent` | The answer's true/false claim agrees with the CBOM. A claim that something is absent counts only if the CBOM declares complete coverage (`pkic:profile:coverage`) |
+| `consistent` | The answer's claim agrees with the CBOM. A claim that something is absent counts only if the CBOM declares complete coverage (`pkic:profile:coverage`) and every algorithm and library in it is one this toolkit can classify |
 | `contradicted` | The claim disagrees with the CBOM: a question to put to the vendor, not a finding of bad faith |
-| `not-evidenced` | The CBOM neither shows nor rules out what the answer says (for example, absence in a CBOM of partial or undeclared coverage) |
+| `not-evidenced` | The CBOM neither shows nor rules out what the answer says (for example, absence in a CBOM of partial or undeclared coverage, or a denial while the CBOM lists entries the toolkit cannot classify, which the detail names) |
+| `below-target` | I1: every algorithm claimed is in the CBOM, but at least one is below the profile's target (for example ML-KEM-768 under `--profile nss`) |
 | `not-checked` | Answered in prose only, with no true/false claim to compare |
 | `unanswered`, `no-cbom`, `info` | Not answered; no CBOM supplied; a fact from the CBOM with nothing to compare |
 
-Stated dates are reported apart from these, as `planned`, `past` (ask for evidence it happened), `implausible`
+Stated dates are reported apart from these, as `planned` (also I1 when `ga_date` is in the future and the
+algorithms are not in today's CBOM yet), `past` (ask for evidence it happened), `implausible`
 (before FIPS 203/204/205 were published), `late` (after 2030) or `missing-date` (absent or not a date; dates may
 be YYYY-MM-DD, YYYY-MM, YYYY, an ISO date-time or a quarter such as Q3 2027).
 
 True/false claims may be JSON booleans or "yes"/"no" text, and an algorithm list may be a JSON list or a
 comma-separated string. A1 (customer data flows) is checked against key-establishment and encryption algorithms,
 counting a hybrid's classical half, and A6 against signature and certificate algorithms; L4 counts only libraries
-that provide cryptography. The CBOM is read including nested components, with a name's parameter set
-(`parameterSetIdentifier`) and the NIST OIDs of the ML-KEM, ML-DSA and SLH-DSA parameter sets.
+that provide cryptography. The CBOM is read including nested components. A bare name takes its
+`parameterSetIdentifier` only when the result is a name the ruleset knows (ML-KEM + 768 is ML-KEM-768; for RSA
+and EC keys that field holds the key size, so rsaEncryption + 2048 stays rsaEncryption). An OID-only entry is
+resolved for the NIST ML-KEM, ML-DSA and SLH-DSA parameter sets and for common classical public-key OIDs (RSA,
+EC, X25519/X448, Ed25519/Ed448, DH).
 
 The report opens with its scope, a statement that it is not a compliance determination, any contradictions, the
 tool and ruleset versions and the SHA-256 of each input. The publication's seven "common concerns in vendor
 responses" are raised from structured claims only (A5's concern from its `stronger_traditional_settings` claim),
 never from free text. `assess` exits `2` when the answers file or its CBOM cannot be read, and `--fail-on
-contradicted,late` (any statuses) makes it exit `1` when a question has one of them; otherwise it exits `0`.
+contradicted,late` (any of the statuses above, case-insensitive) makes it exit `1` when a question has one of
+them; an unknown status name is an error (exit `2`). Otherwise it exits `0`.
 
 ## PQC Maturity Model evidence
 
@@ -465,7 +473,8 @@ model's own response fields for the questions a CBOM can evidence (algorithms in
 interoperability from an observed handshake, inventory completeness, the classical-only client test for
 zero-legacy operation, features that are not quantum-resistant, a draft
 harvest-now-decrypt-later register, hybrid use, CMVP candidates, identifiers) and marks where each value came
-from: observed, derived, snapshot, or vendor-stated. With `--answers`, the "gaps between tool and disclosure"
+from: observed (in the CBOM; the report says whether this toolkit produced the CBOM or it was supplied), derived,
+snapshot, or vendor-stated. The report and JSON record the toolkit and ruleset versions and each input's SHA-256. With `--answers`, the "gaps between tool and disclosure"
 field lists every vendor-readiness disclosure check that the CBOM contradicts or does not evidence, and notes
 when the answers name a different product or version than the CBOM; `[error]` and exit code `2` when either file
 cannot be read.

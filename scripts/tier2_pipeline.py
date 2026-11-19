@@ -52,7 +52,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.6.0-rc.1"
+TOOLKIT_VERSION = "1.6.0"
 
 
 def run(cmd, timeout=25):
@@ -1735,7 +1735,7 @@ def main():
     ap.add_argument("--redact", action="append", default=[],
                     help="old=new string replacement on the final CBOM (repeatable), e.g. corp.internal=example.gov")
     ap.add_argument("--profile", choices=list(cnsa.PROFILES), default=cnsa.DEFAULT_PROFILE,
-                    help="verdict profile: civilian (NIST FIPS 203/204/205 + IR 8547, default) or "
+                    help="ruleset profile: civilian (NIST FIPS 203/204/205 + IR 8547, default) or "
                          "nss (NSA CNSA 2.0)")
     ap.add_argument("--subject-tag", default="",
                     help="RFC 4151 tag URI naming the deployment this CBOM describes, e.g. "

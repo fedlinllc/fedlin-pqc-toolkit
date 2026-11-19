@@ -434,3 +434,111 @@ class Fixes152(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Fixes160(unittest.TestCase):
+    """fedlin-website re-test of 1.5.2 (1.6.0): unrecognised entries are never read as absence."""
+
+    def run_case(self, answers, components, coverage="complete", profile="civilian"):
+        with tempfile.TemporaryDirectory() as d:
+            meta = {"component": {"name": "p", "properties": [{"name": "pkic:profile:coverage", "value": coverage}]}}
+            with open(os.path.join(d, "cbom.json"), "w") as f:
+                json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6", "metadata": meta,
+                           "components": components}, f)
+            answers["cbom"] = "cbom.json"
+            p = os.path.join(d, "answers.json")
+            with open(p, "w") as f:
+                json.dump(answers, f)
+            return vr.assess(p, profile)
+
+    @staticmethod
+    def ps(ref, name, ps, oid=None):
+        c = algo(ref, name)
+        c["cryptoProperties"]["algorithmProperties"]["parameterSetIdentifier"] = ps
+        if oid:
+            c["cryptoProperties"]["oid"] = oid
+        return c
+
+    A1_NO = {"answers": {"A1": {"answer": "no", "claims": {"traditional_asymmetric": False}}}}
+
+    def test_key_size_in_parameter_set_is_not_joined(self):
+        self.assertEqual(vr._algo_name({"name": "rsaEncryption"}, {"parameterSetIdentifier": "2048"}), "rsaEncryption")
+        self.assertEqual(vr._algo_name({"name": "id-ecPublicKey"}, {"parameterSetIdentifier": "256"}), "id-ecPublicKey")
+        self.assertEqual(vr._algo_name({"name": "ML-KEM"}, {"parameterSetIdentifier": "768"}), "ML-KEM-768")
+        res = self.run_case(dict(self.A1_NO), [self.ps("a/1", "rsaEncryption", "2048")])
+        self.assertEqual(res["results"]["A1"]["status"], "contradicted")
+        self.assertIn("rsaEncryption", res["results"]["A1"]["detail"])
+
+    def test_oid_only_rsa_is_judged(self):
+        c = algo("a/1", "")
+        c["cryptoProperties"]["oid"] = "1.2.840.113549.1.1.1"
+        res = self.run_case(dict(self.A1_NO), [c])
+        self.assertEqual(res["results"]["A1"]["status"], "contradicted")
+
+    def test_unrecognised_algorithm_blocks_consistent_denial(self):
+        res = self.run_case(dict(self.A1_NO), [algo("a/1", "ECIES"), algo("a/2", "AES-256-GCM")])
+        r = res["results"]["A1"]
+        self.assertEqual(r["status"], "not-evidenced")
+        self.assertIn("ECIES", r["detail"])
+        res = self.run_case({"answers": {"T3": {"answer": "no", "claims": {"hybrid": False}}}},
+                            [algo("a/1", "VendorKEM-1")])
+        self.assertEqual(res["results"]["T3"]["status"], "not-evidenced")
+        # still consistent when every entry is recognised
+        res = self.run_case(dict(self.A1_NO), [algo("a/1", "ML-KEM-768"), algo("a/2", "AES-256-GCM")])
+        self.assertEqual(res["results"]["A1"]["status"], "consistent")
+
+    def test_unclassified_library_blocks_consistent_l4_denial(self):
+        lib = {"type": "library", "name": "acme-utils", "purl": "pkg:npm/acme-utils@1"}
+        res = self.run_case({"answers": {"L4": {"answer": "no", "claims": {"third_party_crypto": False}}}},
+                            [lib, algo("a/1", "AES-256-GCM")])
+        self.assertEqual(res["results"]["L4"]["status"], "not-evidenced")
+        self.assertIn("acme-utils", res["results"]["L4"]["detail"])
+        for name in ("ring", "jsrsasign", "rustls"):
+            res = self.run_case({"answers": {"L4": {"answer": "no", "claims": {"third_party_crypto": False}}}},
+                                [{"type": "library", "name": name}, algo("a/1", "AES-256-GCM")])
+            self.assertEqual(res["results"]["L4"]["status"], "contradicted", name)
+
+    def test_hybrid_only_cbom_and_a1_denial(self):
+        res = self.run_case(dict(self.A1_NO), [algo("a/1", "X25519MLKEM768")])
+        self.assertEqual(res["results"]["A1"]["status"], "not-evidenced")
+        res = self.run_case({"answers": {"A1": {"answer": "yes", "claims": {"traditional_asymmetric": True}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        self.assertEqual(res["results"]["A1"]["status"], "consistent")
+
+    def test_i1_prose_future_ga_kyber_and_target(self):
+        comps = [algo("a/1", "X25519MLKEM768")]
+        res = self.run_case({"answers": {"I1": {"answer": "We plan ML-KEM next year."}}}, comps)
+        self.assertEqual(res["results"]["I1"]["status"], "not-checked")
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["ML-DSA-65"],
+                                                                         "ga_date": "2028-06"}}}}, comps)
+        self.assertEqual(res["results"]["I1"]["status"], "planned")
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["Kyber768"],
+                                                                         "ga_date": "2025-01"}}}},
+                            [algo("a/1", "Kyber768")])
+        self.assertIn("Kyber768", res["results"]["I1"]["detail"])
+        self.assertNotIn("not in the CBOM", res["results"]["I1"]["detail"])
+        self.assertEqual(res["results"]["I1"]["status"], "below-target")
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["ML-KEM-768"],
+                                                                         "ga_date": "2025-01"}}}},
+                            [algo("a/1", "ML-KEM-768")], profile="nss")
+        self.assertEqual(res["results"]["I1"]["status"], "below-target")
+
+    def test_fail_on_rejects_unknown_status(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "a.json")
+            with open(p, "w") as f:
+                json.dump({"answers": {"L1": {"answer": "no", "claims": {"cbom": True}}}}, f)
+            out = os.path.join(d, "r.md")
+            self.assertEqual(vr.main(["assess", "--answers", p, "--out", out, "--fail-on", "contradictd"]), 2)
+            self.assertEqual(vr.main(["assess", "--answers", p, "--out", out, "--fail-on", "CONTRADICTED"]), 1)
+            self.assertEqual(vr.main(["assess", "--answers", p, "--out", out, "--fail-on", "late"]), 0)
+
+    def test_concerns_line_mentions_contradictions(self):
+        res = self.run_case(dict(self.A1_NO, answers={
+            "A1": {"answer": "no", "claims": {"traditional_asymmetric": False}, "evidence": ["x"]},
+            "L1": {"answer": "yes", "claims": {"cbom": True}, "evidence": ["x"]},
+            "L2": {"answer": "x", "evidence": ["x"]}, "T5": {"answer": "x", "evidence": ["x"]}}),
+            [algo("a/1", "RSA-2048")])
+        md = vr.report_md(res)
+        if not res["concerns"]:
+            self.assertIn("contradictions above are listed separately", md)
