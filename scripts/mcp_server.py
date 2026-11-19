@@ -274,7 +274,7 @@ class Server:
                 continue
             try:
                 msg = json.loads(line)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):   # malformed, or nested deeper than the parser allows
                 resp = _err(None, -32700, "parse error")
             else:
                 resp = self.handle(msg)

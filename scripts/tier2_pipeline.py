@@ -14,6 +14,7 @@ Usage:  python3 tier2_pipeline.py --out out/cbom.json [--validate ./bin/cycloned
 import argparse
 import datetime
 import fnmatch
+import ipaddress
 import json
 import os
 import re
@@ -30,6 +31,7 @@ import policy as policymod
 import report as reportmod
 import wave as wavemod
 import context as ctxmod
+import crosswalk
 
 # Optional private modules (FEDLIN engagement kit). The public toolkit runs without them; their flags
 # are hidden from --help and refused with a clear message when the module is absent.
@@ -50,7 +52,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.4.1"
+TOOLKIT_VERSION = "1.5.0"
 
 
 def run(cmd, timeout=25):
@@ -873,14 +875,25 @@ def parse_endpoints(values):
     for t in tokens:
         t = re.sub(r"^[a-zA-Z]+://", "", t.strip())  # strip scheme
         t = t.split("/", 1)[0]                        # strip any path
+        if t.count(":") > 1 and not t.startswith("["):
+            try:                                      # a bare IPv6 address: 2001:db8::1 -> [2001:db8::1]
+                t = "[" + str(ipaddress.IPv6Address(t)) + "]"
+            except ValueError:
+                pass
         m = re.match(r"^\[([0-9A-Fa-f:.]+)\](?::(\d+))?$", t)  # [IPv6] or [IPv6]:port
+        port = None
         if m:
             host = "[" + m.group(1) + "]"
-            t = host if not m.group(2) or m.group(2) == "443" else f"{host}:{m.group(2)}"
+            port = m.group(2)
+            t = host if not port or port == "443" else f"{host}:{port}"
         else:
             t = _canon_endpoint(t)
             host = t.rsplit(":", 1)[0] if t.count(":") == 1 else t
+            port = t.rsplit(":", 1)[1] if t.count(":") == 1 else None
         if not t or t in seen:
+            continue
+        if port is not None and not (port.isdigit() and 1 <= int(port) <= 65535):
+            sys.stderr.write(f"[warn] --endpoints: {t!r}: the port must be a number from 1 to 65535, skipped\n")
             continue
         if not valid_host(host):
             sys.stderr.write(f"[warn] --endpoints: {t!r} is not a valid hostname or IP, skipped\n")
@@ -1353,7 +1366,7 @@ def generate_deps_sbom(repo, cdxgen_bin, out):
             return True
         except Exception:
             pass
-    sys.stderr.write("[warn] cdxgen produced no usable SBOM; continuing runtime-only\n")
+    sys.stderr.write("[warn] cdxgen produced no usable SBOM\n")
     return False
 
 
@@ -1581,16 +1594,18 @@ def convert_bom(cyclonedx_bin, inp, out, version="v1_6"):
 
 
 def generate_theia_cbom(theia_bin, mode, target, cyclonedx_bin, out):
-    """Run cbomkit-theia (dir|image) -> CycloneDX (1.7) -> convert to 1.6 -> out."""
+    """Run cbomkit-theia (dir|image) -> CycloneDX (1.7) -> convert to 1.6 -> out.
+
+    Returns the number of components, or -1 when the tool failed (no output, unreadable output)."""
     sys.stderr.write(f"[theia] cbomkit-theia {mode} {target} ...\n")
     try:
         r = subprocess.run([theia_bin, mode, target], capture_output=True, text=True, timeout=240)
     except Exception as e:
         sys.stderr.write(f"[warn] cbomkit-theia failed: {e}\n")
-        return False
+        return -1
     if not r.stdout.strip():
         sys.stderr.write(f"[warn] cbomkit-theia no output: {r.stderr.strip()[:160]}\n")
-        return False
+        return -1
     raw = out + ".raw.json"
     text = r.stdout
     try:
@@ -1609,9 +1624,10 @@ def generate_theia_cbom(theia_bin, mode, target, cyclonedx_bin, out):
         with open(out) as f:
             n = len(json.load(f).get("components", []))
         print(f"[ok] cbomkit-theia ({mode}) CBOM: {n} components")
-        return n > 0
-    except Exception:
-        return False
+        return n
+    except Exception as e:
+        sys.stderr.write(f"[warn] cbomkit-theia output unreadable: {e}\n")
+        return -1
 
 
 _LEVEL_KEYS = ("classicalSecurityLevel", "nistQuantumSecurityLevel")
@@ -1650,7 +1666,7 @@ def merge_boms(cyclonedx_bin, inputs, out):
     r = _cyclonedx(cyclonedx_bin, ["merge", "--input-files", *inputs, "--output-file", out,
                                    "--output-version", "v1_6"])
     if r is None:
-        sys.stderr.write(f"[warn] {len(inputs) - 1} merged input(s) dropped: the CBOM is runtime-only\n")
+        sys.stderr.write(f"[warn] cyclonedx-cli is needed to merge {len(inputs) - 1} input(s)\n")
         return False
     if r.returncode != 0:
         sys.stderr.write(f"[warn] merge failed: {r.stderr.strip()}\n")
@@ -1658,12 +1674,57 @@ def merge_boms(cyclonedx_bin, inputs, out):
     return True
 
 
+_FILE_SUFFIXES = (".txt", ".csv", ".lst", ".list")
+
+
+def missing_endpoint_files(values):
+    """Values of --endpoints that look like a hosts file but do not exist.
+
+    A file that is not there would otherwise be scanned as a hostname ("hosts.txt"), fail, and leave a
+    run with nothing in it. A value is taken as a file when it starts with ./, ../, / or ~, is a path whose
+    first part has no dot (lists/hosts), or is a bare name ending in a list-file suffix that is not a domain
+    (.txt, .csv, .lst, .list). URLs are never files."""
+    out = []
+    for v in values:
+        if os.path.exists(v):
+            continue
+        for t in re.split(r"[,\s]+", v):
+            if not t or "://" in t:
+                continue                       # a URL, not a file
+            head = t.split("/", 1)[0]
+            if (t.startswith(("./", "../", "/", "~"))
+                    or ("/" in t and "." not in head)                       # dir/hosts
+                    or ("/" not in t and t.lower().endswith(_FILE_SUFFIXES))):  # hosts.txt
+                out.append(t)
+    return out
+
+
+def tool_available(path):
+    """True when `path` names an executable file, or a command on PATH."""
+    return bool(path) and ((os.path.isfile(path) and os.access(path, os.X_OK)) or shutil.which(path) is not None)
+
+
+def abort(msg, cleanup=()):
+    """A requested source produced nothing: stop with exit code 2 (STABILITY.md), never a CBOM a CI gate reads
+    as a pass. Intermediate files from this run are removed; no CBOM, policy result or report is written."""
+    for p in cleanup:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    sys.stderr.write(f"[error] {msg}\n")
+    sys.exit(2)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", action="version",
                     version=f"fedlin-pqc-toolkit {TOOLKIT_VERSION} (ruleset {cnsa.RULESET_VERSION})")
     ap.add_argument("--out", default="out/cbom.json")
-    ap.add_argument("--name", default="openshift-cluster")
+    ap.add_argument("--name", default="",
+                    help="name of the system scanned, used in the report title and the CBOM subject (default: the "
+                         "first endpoint, else the --repo/--theia-dir folder name, else openshift-cluster for a "
+                         "cluster scan)")
     ap.add_argument("--repo", default="", help="optional source repo/dir -> cdxgen dependency SBOM, merged in")
     ap.add_argument("--theia-dir", default="", help="optional dir -> cbomkit-theia scan (certificates, keys, secret-hygiene findings; may read key files), merged in")
     ap.add_argument("--theia-image", default="", help="optional container image ref -> cbomkit-theia scan, merged in")
@@ -1680,8 +1741,9 @@ def main():
                     help="RFC 4151 tag URI naming the deployment this CBOM describes, e.g. "
                          "tag:example.com,2026-11-14:prod-edge (PKI Consortium profile rule P3). "
                          "Default: tag:<system name if it is a DNS name, else pqc-toolkit.invalid>,<date>:<name>")
-    ap.add_argument("--regime", default="",
-                    help="annotate assets with a regime crosswalk: FISMA|CMMC|HIPAA|PCI-DSS|GLBA|NERC-CIP")
+    ap.add_argument("--regime", default="", type=str.upper, choices=["", *crosswalk.REGIMES],
+                    metavar="{" + ",".join(crosswalk.REGIMES) + "}",
+                    help="annotate assets with a regime crosswalk (case does not matter)")
     ap.add_argument("--deep", action="store_true",
                     help="run intrusive checks (FIPS via oc/kubectl debug node: spins a short-lived pod)")
     ap.add_argument("--debug-image", default="",
@@ -1720,20 +1782,26 @@ def main():
     ap.add_argument("--endpoints", action="append", default=[],
                     help="live TLS endpoint scan WITHOUT a cluster: a file of host[:port] lines (# comments ok) "
                          "and/or an inline comma list, e.g. --endpoints agency-hosts.txt --endpoints www.agency.gov. "
-                         "Works with --no-runtime (endpoint-only, the thin-footprint on-ramp) or augments cluster "
-                         "routes in a cluster run. Reads public certificate metadata only.")
+                         "On its own no cluster is scanned; with --cluster it augments the cluster's routes. "
+                         "Reads public certificate metadata only.")
     ap.add_argument("--no-runtime", action="store_true",
-                    help="skip the OCP cluster capture (oc): build the CBOM from "
-                         "--endpoints/--repo/--theia-dir only")
+                    help="never scan a cluster: build the CBOM from --endpoints/--repo/--theia-dir/--merge-cbom "
+                         "only. From 1.5.0 this is the default whenever one of those is given")
+    ap.add_argument("--cluster", action="store_true",
+                    help="also scan the Kubernetes/OpenShift cluster of the current kube context (routes or "
+                         "ingresses, TLS secret counts). Needs cluster-wide list on secrets. From 1.5.0 a run "
+                         "with a source flag scans a cluster only with this flag")
+    ap.add_argument("--local-ssh", action="store_true",
+                    help="also record this host's own SSH configuration (sudo -n sshd -T). Off unless given, "
+                         "except in a run with no source flag at all (as before 1.5.0)")
     ap.add_argument("--self-serve", action="store_true",
-                    help="Unattended automated-scan mode: implies --no-runtime + --report; emits a GATED report "
-                         "(automated-scan disclaimer, confidence bands, engineered roadmap withheld)")
+                    help="unattended automated-scan mode: implies --no-runtime and --report; the report carries "
+                         "an automated-scan disclaimer and confidence bands")
     ap.add_argument("--brand", default="FEDLIN",
-                    help="white-label the report deliverable under a reseller's name")
+                    help="name the report is issued under")
     ap.add_argument("--sign", action="store_true",
-                    help="emit a detached SLH-DSA (FIPS 205) attestation over the CBOM + report + delta "
-                         "(<out>.attestation.json), making the 'signed, tamper-evident' claim literal. "
-                         "Needs a signing key: $SPHINCS_PRIVATE_KEY_B64 or --slh-key.")
+                    help="write a detached SLH-DSA (FIPS 205) attestation over the CBOM, report and delta "
+                         "(<out>.attestation.json). Needs a signing key: $SPHINCS_PRIVATE_KEY_B64 or --slh-key.")
     ap.add_argument("--slh-key", default="",
                     help="SLH-DSA private-key file for --sign (default: $SPHINCS_PRIVATE_KEY_B64)")
     ap.add_argument("--slh-variant", default="",
@@ -1787,6 +1855,19 @@ def main():
     for flag, x in (("--repo", args.repo), ("--theia-dir", args.theia_dir)):
         if x and not os.path.isdir(x):
             bad.append(f"{flag} {x}: not a directory")
+    for x in missing_endpoint_files(args.endpoints):
+        bad.append(f"--endpoints {x}: no such file (a hosts file must exist; in a container, mount it)")
+    here = os.path.dirname(os.path.abspath(__file__))
+    cdxgen_bin = args.cdxgen or os.path.join(here, "..", "node_modules", ".bin", "cdxgen")
+    cyclonedx_bin = args.cyclonedx or os.path.join(here, "..", "bin", "cyclonedx")
+    theia_bin = args.theia or os.path.join(here, "..", "bin", "cbomkit-theia")
+    if args.repo and not tool_available(cdxgen_bin):
+        bad.append(f"--repo needs cdxgen ({cdxgen_bin}): run ./setup.sh or pass --cdxgen")
+    if (args.theia_dir or args.theia_image) and not tool_available(theia_bin):
+        bad.append(f"--theia-dir/--theia-image need cbomkit-theia ({theia_bin}): run ./setup.sh or pass --theia")
+    if (args.repo or args.theia_dir or args.theia_image or args.merge_cbom) and not tool_available(cyclonedx_bin):
+        bad.append(f"--repo, --theia-dir, --theia-image and --merge-cbom need cyclonedx-cli to merge "
+                   f"({cyclonedx_bin}): run ./setup.sh or pass --cyclonedx")
     if bad:
         for b in bad:
             sys.stderr.write(f"[error] {b}\n")
@@ -1801,17 +1882,64 @@ def main():
                              "--theia-dir <dir>, and/or --merge-cbom <cbom.json>\n")
             sys.exit(2)
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    cdxgen_bin = args.cdxgen or os.path.join(here, "..", "node_modules", ".bin", "cdxgen")
-    cyclonedx_bin = args.cyclonedx or os.path.join(here, "..", "bin", "cyclonedx")
-    theia_bin = args.theia or os.path.join(here, "..", "bin", "cbomkit-theia")
+    # Which targets this run scans (1.5.0). A source flag means a scan of that source only: the cluster of the
+    # current kube context and this host's sshd are scanned only when asked for (--cluster, --local-ssh). A
+    # run with no source flag at all keeps the pre-1.5.0 behaviour (cluster plus local SSH) and names the
+    # context it is about to scan.
+    has_source = bool(args.endpoints or args.repo or args.theia_dir or args.theia_image or args.merge_cbom)
+    ssh_asked = args.local_ssh
+    if args.cluster and args.no_runtime:
+        sys.stderr.write("[error] --cluster and --no-runtime contradict each other; pass one\n")
+        sys.exit(2)
+    if has_source and not args.cluster and not args.no_runtime:
+        cluster_only = [f for f, on in (("--deep", args.deep), ("--debug-image", args.debug_image),
+                                        ("--kube-cli", args.kube_cli != "oc")) if on]
+        if cluster_only:
+            sys.stderr.write(f"[error] {', '.join(cluster_only)} appl{'ies' if len(cluster_only) == 1 else 'y'} "
+                             "to a cluster scan: add --cluster (from 1.5.0 a run with --endpoints, --repo, "
+                             "--theia-dir or --merge-cbom does not scan a cluster unless asked)\n")
+            sys.exit(2)
+        args.no_runtime = True
+    elif not has_source and not args.cluster and not args.no_runtime:
+        args.local_ssh = True
+        if _CLI_RE.match(args.kube_cli):
+            kctx = run(f"{shlex.quote(args.kube_cli)} config current-context 2>/dev/null").strip() or "(none)"
+            sys.stderr.write(f"[info] no source flag given, so this run scans the cluster of kube context "
+                             f"{kctx!r} and this host's SSH configuration (sudo -n sshd -T). Pass --cluster "
+                             "[--local-ssh] to say so explicitly, or --endpoints/--repo/--theia-dir/--merge-cbom "
+                             "for a scan without a cluster.\n")
+
+    def local_ssh():
+        if not args.local_ssh:
+            return None
+        got = capture_ssh()
+        if got is None and ssh_asked:
+            abort("--local-ssh: could not read this host's SSH configuration (needs sshd and passwordless "
+                  "sudo for `sshd -T`)")
+        return got
+
+    if not args.name:
+        eps = parse_endpoints(args.endpoints) if args.endpoints else []
+        src = args.repo or args.theia_dir
+        if eps:
+            m6 = re.match(r"^\[([^\]]+)\]", eps[0])
+            args.name = m6.group(1) if m6 else eps[0].rsplit(":", 1)[0]
+        elif src:
+            args.name = os.path.basename(os.path.normpath(os.path.abspath(src))) or "scan"
+        elif args.no_runtime:
+            args.name = "scan"
+        else:
+            args.name = "openshift-cluster"
 
     # --- runtime capture (cluster): skipped for --no-runtime / --self-serve (source-based) ---
     if args.no_runtime:
-        ssh = None
+        ssh = local_ssh()
         counts = {"tls_secrets": 0, "sealed_secrets": 0}
         hosts = parse_endpoints(args.endpoints)
         certs = capture_endpoints(hosts) if hosts else []
+        if hosts and not certs:
+            abort(f"--endpoints: none of the {len(hosts)} endpoint(s) completed a TLS handshake, so there is "
+                  "nothing to assess (see the warnings above: name, port, firewall or no TLS on that port)")
         if hosts:
             mode = "self-serve" if args.self_serve else "endpoint-scan"
             ctx = {"mode": mode,
@@ -1856,13 +1984,17 @@ def main():
         hosts = parse_endpoints(args.endpoints)
         if hosts:
             seen = {c["host"] for c in certs}
-            for c in capture_endpoints(hosts):
+            ep_certs = capture_endpoints(hosts)
+            if not ep_certs:
+                abort(f"--endpoints: none of the {len(hosts)} endpoint(s) completed a TLS handshake (see the "
+                      "warnings above)")
+            for c in ep_certs:
                 if c["host"] not in seen:
                     certs.append(c)
                     seen.add(c["host"])
             ctx["endpoints_supplied"] = len(hosts)
         counts = capture_counts(kube)
-        ssh = capture_ssh()
+        ssh = local_ssh()
         ctx.update({"tls_secret_count": counts["tls_secrets"], "sealed_secret_count": counts["sealed_secrets"]})
         ctx["fips"] = capture_fips(kube, platform, args.debug_image) if args.deep else "not checked (use --deep)"
     if args.regime:
@@ -1931,26 +2063,30 @@ def main():
     if args.repo:
         deps_tmp = args.out + ".deps.json"
         intermediates.append(deps_tmp)
-        if generate_deps_sbom(args.repo, cdxgen_bin, deps_tmp):
-            inputs.append(deps_tmp)
-            originals.append(deps_tmp)
+        if not generate_deps_sbom(args.repo, cdxgen_bin, deps_tmp):
+            abort(f"--repo {args.repo}: cdxgen produced no SBOM (see the warnings above)", intermediates)
+        inputs.append(deps_tmp)
+        originals.append(deps_tmp)
     if args.theia_dir:
         t = args.out + ".theia-dir.json"
         intermediates += [t, t + ".raw.json"]
         originals.append(t + ".raw.json")
-        if generate_theia_cbom(theia_bin, "dir", args.theia_dir, cyclonedx_bin, t):
+        n = generate_theia_cbom(theia_bin, "dir", args.theia_dir, cyclonedx_bin, t)
+        if n < 0:
+            abort(f"--theia-dir {args.theia_dir}: cbomkit-theia failed (see the warnings above)", intermediates)
+        if n:
             inputs.append(t)
     if args.theia_image:
         t = args.out + ".theia-image.json"
         intermediates += [t, t + ".raw.json"]
         originals.append(t + ".raw.json")
-        if generate_theia_cbom(theia_bin, "image", args.theia_image, cyclonedx_bin, t):
+        n = generate_theia_cbom(theia_bin, "image", args.theia_image, cyclonedx_bin, t)
+        if n < 0:
+            abort(f"--theia-image {args.theia_image}: cbomkit-theia failed (see the warnings above)", intermediates)
+        if n:
             inputs.append(t)
     # generic external CycloneDX CBOM ingest (e.g. CBOMkit source scan, run out-of-band)
     for i, extra in enumerate(args.merge_cbom):
-        if not os.path.exists(extra):
-            sys.stderr.write(f"[warn] --merge-cbom {extra}: not found, skipping\n")
-            continue
         conv = f"{args.out}.merge{i}.json"
         intermediates.append(conv)
         originals.append(extra)
@@ -1964,8 +2100,11 @@ def main():
             print(f"[ok] merge-cbom {os.path.basename(extra)}: {n} crypto-asset(s) ingested")
             inputs.append(conv)
         except Exception as e:
-            sys.stderr.write(f"[warn] --merge-cbom {extra}: unreadable ({e}), skipping\n")
-    if len(inputs) > 1 and merge_boms(cyclonedx_bin, inputs, args.out):
+            abort(f"--merge-cbom {extra}: unreadable ({e})", intermediates)
+    if len(inputs) > 1:
+        if not merge_boms(cyclonedx_bin, inputs, args.out):
+            abort(f"{len(inputs) - 1} input(s) could not be merged into the CBOM (see the warnings above)",
+                  intermediates)
         print(f"[ok] merged runtime + dependency SBOM -> {args.out}")
     else:
         shutil.copy(runtime_tmp, args.out)
@@ -2080,7 +2219,7 @@ def main():
                 f.write(md + "\n")
             with open(summ, "w") as f:
                 json.dump(summary, f, indent=2)
-            print(f"[ok] report: {rpt}: score {summary['readiness_score']} ({summary['grade']}), "
+            print(f"[ok] report: {rpt}: score {summary['readiness_score']}{' (incomplete)' if summary['incomplete'] else ''}, "
                   f"algorithms (all lanes): {summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
         except Exception as e:
             sys.stderr.write(f"[warn] report generation failed: {e}\n")
@@ -2126,11 +2265,13 @@ def main():
     if args.sign:
         dpath = out_base + ".delta.md"
 
+        signer = None
+
         def _rewrite_report(signed):
             """Re-render the report with/without the attestation claim. Returns True on success."""
             md_, _ = reportmod.build_report(view, self_serve=args.self_serve, brand=args.brand,
                                             signed=signed, attestation_name=att_name if signed else None,
-                                            attention=attention)
+                                            attention=attention, signer=signer if signed else None)
             with open(rpt, "w") as f:
                 f.write(md_ + "\n")
             return True
@@ -2157,6 +2298,9 @@ def main():
             # Upgrade the report to CLAIM the attestation, THEN sign so the signature covers that exact
             # text. Order matters: the on-disk report was written UNSIGNED above, so any failure here
             # leaves (or is restored to) an unsigned report: never a false claim.
+            # name the key that will sign before the report claims it (FEDLIN only for the published key)
+            signer = signmod.signing_identity(key_file=args.slh_key or None, variant=args.slh_variant or None,
+                                              node_bin=args.node)
             if args.report and os.path.exists(rpt):
                 _rewrite_report(signed=True)
             att = signmod.sign_artifacts(_artifacts(), att_path, signed_at=cbom_ts,

@@ -22,6 +22,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # sibling modules, also under python -I
@@ -196,7 +197,20 @@ def verify(result, cbom_path):
     return want.get(os.path.basename(cbom_path)) == got or got in want.values()
 
 
-_CHECKED = ("status", "target", "quantumVulnerable", "priority", "controls", "lane", "canonical")
+# Every field of the result is compared with a fresh evaluation, except the evaluation date (1.5.0; before,
+# only status, target, quantumVulnerable, priority, controls, lane and canonical were, so dates, citations,
+# notes and the policy's sources could be changed unnoticed).
+_NOT_COMPARED = ("evaluationDate",)
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _regime_of(result):
+    """The crosswalk regime the result was evaluated with (None without one), so it can be re-evaluated alike."""
+    for f in result.get("findings", []) or []:
+        cw = f.get("crosswalk") if isinstance(f, dict) else None
+        if isinstance(cw, dict) and cw.get("regime"):
+            return str(cw["regime"])
+    return None
 
 
 def check(result, cbom_path):
@@ -204,8 +218,9 @@ def check(result, cbom_path):
 
     bound:       the CBOM file's SHA-256 matches the digest the result recorded for it.
     ruleset:     the result names this toolkit's ruleset (same SHA-256), so it can be re-checked here.
-    reproduced:  re-evaluating the CBOM with that ruleset and profile gives every recorded verdict
-                 (status, target, quantum vulnerability, priority). None when the ruleset differs.
+    reproduced:  re-evaluating the CBOM with that ruleset, profile and regime gives the same result, field for
+                 field (every finding, the policy block, documents, summary, notAsserted); only the
+                 evaluation date may differ. None when the ruleset differs.
     A policy result is not signed: a file that passes says only that its verdicts are what this ruleset
     gives for this CBOM, which is exactly what can be checked without trusting whoever wrote it.
     """
@@ -218,7 +233,25 @@ def check(result, cbom_path):
             out["reproduced"] = False
             out["mismatches"].append("policy result names no known profile")
         else:
-            fresh = evaluate(cbom_path, profile=profile)
+            regime = _regime_of(result)
+            try:
+                fresh = evaluate(cbom_path, profile=profile, regime=regime)
+            except Exception as e:  # an unknown regime, for instance
+                fresh = evaluate(cbom_path, profile=profile)
+                out["mismatches"].append(f"cannot re-evaluate with regime {regime!r}: {e}")
+            if not _DATE_RE.match(str(result.get("evaluationDate", ""))):
+                out["mismatches"].append("evaluationDate is not a YYYY-MM-DD date")
+            for k in sorted(set(result) | set(fresh)):
+                if k in _NOT_COMPARED or k in ("findings", "summary"):
+                    continue
+                a, b = fresh.get(k), result.get(k)
+                if a == b:
+                    continue
+                if isinstance(a, dict) and isinstance(b, dict):
+                    sub = sorted(x for x in set(a) | set(b) if a.get(x) != b.get(x))
+                    out["mismatches"].append(f"{k}: {', '.join(sub)} differ{'s' if len(sub) == 1 else ''}")
+                else:
+                    out["mismatches"].append(f"{k}: {'added' if a is None else 'missing' if b is None else 'differs'}")
             key = lambda f: (f.get("bomRef"), f.get("lane"), f.get("name"))  # noqa: E731
             seen = {}
             for f in result.get("findings", []) or []:
@@ -235,7 +268,7 @@ def check(result, cbom_path):
                 if a is None or b is None:
                     out["mismatches"].append(f"{k[0]} {k[2]}: finding {'added' if a is None else 'missing'}")
                     continue
-                diff = [x for x in _CHECKED if a.get(x) != b.get(x)]
+                diff = sorted(x for x in set(a) | set(b) if a.get(x) != b.get(x))
                 if diff:
                     out["mismatches"].append(f"{k[0]} {k[2]}: {', '.join(diff)} differ")
             out["reproduced"] = not out["mismatches"]
@@ -339,7 +372,8 @@ def main(argv=None):
     e = sub.add_parser("evaluate")
     e.add_argument("--cbom", required=True)
     e.add_argument("--profile", choices=list(cnsa.PROFILES), default=cnsa.DEFAULT_PROFILE)
-    e.add_argument("--regime", default="")
+    e.add_argument("--regime", default="", type=str.upper, choices=["", *crosswalk.REGIMES],
+                   metavar="{" + ",".join(crosswalk.REGIMES) + "}")
     e.add_argument("--date", default=None)
     e.add_argument("--out", default="")
     v = sub.add_parser("verify")
@@ -365,7 +399,7 @@ def main(argv=None):
         print(f"[FAIL] the result names ruleset {pol.get('version')!r}, not this toolkit's {cnsa.RULESET_VERSION} "
               "(different digest): its verdicts cannot be re-checked here; re-run `policy.py evaluate`")
     if c["reproduced"] is True:
-        print("[ok] every verdict reproduced by re-evaluating the CBOM")
+        print("[ok] every field reproduced by re-evaluating the CBOM (only the evaluation date may differ)")
     elif c["reproduced"] is False:
         print(f"[FAIL] verdicts do not match a re-evaluation ({len(c['mismatches'])}): " + "; ".join(c["mismatches"][:10]))
     return 0 if c["ok"] else 1

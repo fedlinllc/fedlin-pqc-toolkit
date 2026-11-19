@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.4"
+RULESET_VERSION = "1.0.5"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -1191,11 +1191,22 @@ def classify(name, bits=None, profile=None):
         v["note"] += f" {curve} is not a NIST-approved curve."
         if v["standard_status"] == "nist":
             v["standard_status"] = "non-nist"
+    # A TLS/SSL cipher suite or an OpenSSH transport cipher protects data in transit: SC-8, not SC-28 (data at
+    # rest), which the bare cipher carries (1.0.5; before, TLS_AES_256_GCM_SHA384 cited SC-28).
+    if _is_transport_name(name, len(verdicts)) and "SC-28" in v["controls"]:
+        v["controls"] = sorted((set(v["controls"]) - {"SC-28"}) | {"SC-8"})
     v["algorithm"] = name
     v["profile"] = profile
     v["rule_id"] = f"{RULESET_VERSION}:{v['canonical']}"
     v.pop("label", None)
     return v
+
+
+def _is_transport_name(name, n_components):
+    """A protocol cipher-suite name: TLS_/SSL_ suites, OpenSSL suite names (several components, such as
+    ECDHE-RSA-AES256-GCM-SHA384), and OpenSSH ciphers named @openssh.com."""
+    n = (name or "").strip()
+    return n.upper().startswith(("TLS_", "SSL_")) or n.lower().endswith("@openssh.com") or n_components > 1
 
 
 def classical_level(name, bits=None):

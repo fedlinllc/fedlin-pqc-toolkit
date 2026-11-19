@@ -29,6 +29,20 @@ regular issue and cite the primary source. Confirmed changes are logged in `CORR
 - Tool downloads are pinned and checksum-verified (`toolkit.lock`); the README lists the exceptions.
 - The local MCP server never scans or connects to the network, reads only `.json` files under the folder
   it is started with, writes nothing, and marks file-derived text as untrusted.
-- A policy result is used only when its verdicts re-check against this toolkit's ruleset
-  (`policy.py verify`); otherwise the CBOM is evaluated again.
+- A policy result is used only when re-evaluating the CBOM with this toolkit's ruleset reproduces it
+  field for field (`policy.py verify`); otherwise the CBOM is evaluated again.
 - Releases carry Sigstore-signed SLSA build provenance; see "Verify a release" in the README.
+
+## FEDLIN's report-signing key
+
+Reports FEDLIN delivers in an engagement can come with a detached SLH-DSA (FIPS 205) attestation. A report
+says FEDLIN signed it only when the signing key is this one; a report signed with any other key says so and
+names that key's ID instead. Compare the key ID in the report, and the one the verifier prints, with:
+
+| | |
+|---|---|
+| Algorithm | SLH-DSA-SHA2-128f (FIPS 205) |
+| Key ID (first 16 hex of SHA-256 over the raw public key) | `c3341db5cacf5295` |
+| Public key (base64) | `ZH11mFKd3LlTPsxK6l2IvWpMxxV/U8y/I7A/ZF/2RGw=` |
+
+If this key is ever replaced, the change is announced here and in a GitHub security advisory.

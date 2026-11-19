@@ -150,7 +150,7 @@ class Invariants(unittest.TestCase):
             self.assertEqual(cnsa.classify(cid)["canonical"], cid)
 
     def test_version(self):
-        self.assertEqual(cnsa.RULESET_VERSION, "1.0.4")
+        self.assertGreaterEqual(tuple(map(int, cnsa.RULESET_VERSION.split("."))), (1, 0, 4))
 
 
 if __name__ == "__main__":

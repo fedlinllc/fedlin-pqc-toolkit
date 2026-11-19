@@ -46,11 +46,13 @@ SUMMARY_KEYS = {"algorithms_classified", "awaiting_review", "cbom_timestamp", "c
                 "certs_expiring_90d", "certs_over_lifetime_cap", "cipher_suites", "classical_fallback", "cmvp", "evidence", "attention",
                 "grade", "hndl_exposures", "kex_unobserved", "lanes", "min_tls", "other_assets", "profile",
                 "public_key_usages_scored", "quantum_resistant", "quantum_vulnerable", "readiness_score", "regime",
-                "secret_hygiene_detections", "system"}
+                "secret_hygiene_detections", "system",
+                "incomplete", "tls_endpoints", "tls_endpoints_pq_kex", "scope", "disclaimer"}
 CLI_FLAGS = {"--version", "--out", "--name", "--repo", "--theia-dir", "--theia-image", "--cdxgen", "--theia",
              "--cyclonedx", "--validate", "--redact", "--profile", "--subject-tag", "--regime", "--deep",
              "--debug-image", "--kube-cli", "--report", "--merge-cbom", "--exclude", "--no-dep-crypto",
-             "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime", "--wave", "--context"}
+             "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime", "--wave", "--context",
+             "--cluster", "--local-ssh"}
 EVIDENCE_SOURCES = {  # STABILITY.md "Evidence sources": source -> (technique, confidence)
     "handshake": ("dynamic-analysis", 1.0), "probe": ("dynamic-analysis", 1.0),
     "configuration": ("other", 0.8), "file": ("other", 0.8),

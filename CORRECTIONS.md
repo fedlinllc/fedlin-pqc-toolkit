@@ -4,6 +4,14 @@ Every change to a verdict, a cited date or a public claim is recorded here with 
 wrong, what it is now, and the source that settled it. Verdicts come from `scripts/cnsa20_ruleset.py`;
 each rule cites a source key defined in `SOURCES` in that file.
 
+## 2026-11-19: ruleset 1.0.5 (newcomer pressure test of v1.4.1)
+
+| Identifier | Was (1.0.4) | Now (1.0.5) | Source |
+|---|---|---|---|
+| TLS and SSL cipher suites (`TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`, `ECDHE-RSA-AES256-GCM-SHA384`, ...) and OpenSSH ciphers named `@openssh.com` | NIST SP 800-53 controls included SC-28 (protection of information at rest), taken from the bare cipher | SC-8 (transmission confidentiality and integrity) in place of SC-28; SC-12, SC-13 and SC-17 unchanged. Status, priority and targets unchanged. A bare cipher name (`AES-256-GCM`) keeps SC-28 | NIST SP 800-53 Rev. 5 (SC-8, SC-28) |
+
+Only the control mapping changed, so scores and verdicts are the same as under 1.0.4.
+
 ## 2026-11-16: ruleset 1.0.4 (pressure test of v1.3.0)
 
 | Identifier | Was (1.0.3) | Now (1.0.4) | Source |

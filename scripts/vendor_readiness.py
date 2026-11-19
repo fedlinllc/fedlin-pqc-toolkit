@@ -36,6 +36,21 @@ DEADLINE = datetime.date(2030, 12, 31)
 _HYBRID = re.compile(r"mlkem.*(x25519|x448|secp|nistp)|(x25519|x448|secp|nistp).*mlkem", re.I)
 
 
+def attribution(doc, md=True):
+    """CC BY 4.0 attribution for the reproduced questions: title, authors, copyright, licence, source and the
+    changes made (section 3(a)(1) of the licence), and no implied endorsement."""
+    s = doc["source"]
+    urls = s.get("urls") or []
+    link = (lambda u: f"<{u}>") if md else (lambda u: u)
+    return ("Questions, \"why it matters\" and \"key response considerations\" from "
+            f"*{s['title']}* by {s['authors']}, published {s['published']}. (c) Commonwealth of Australia 2026, "
+            "licensed under CC BY 4.0 (" + link("https://creativecommons.org/licenses/by/4.0/") + "). Source: "
+            + ", ".join(link(u) for u in urls) + ". Changes: the text is reproduced as published apart from PDF "
+            "line-break hyphenation; the question ids (L1 to C6), the answer and evidence prompts, the claim types "
+            "and the checks are added by fedlin-pqc-toolkit. ASD, CISA and NSA have not reviewed or endorsed this "
+            "tool or its results.")
+
+
 def load_questions(path=QUESTIONS):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -45,7 +60,7 @@ def load_questions(path=QUESTIONS):
 def questionnaire_md(doc):
     s = doc["source"]
     L = [f"# {s['title']}", "",
-         f"Questions from {s['authors']}, published {s['published']}. Reproduced under CC BY 4.0.", "",
+         attribution(doc), "",
          f"> {s['scaling_note']}", "",
          "For each question, please give your answer and the evidence behind it (document names, links, "
          "release notes). Where you have a cryptographic bill of materials (CBOM), please attach it in "
@@ -57,7 +72,7 @@ def questionnaire_md(doc):
             L += [f"## {phase}", ""]
         L += [f"### {q['id']}. {q['question']}", "",
               f"*Why it matters:* {q['why_it_matters']}", "",
-              f"*What a strong answer includes:* {q['key_response_considerations']}", "",
+              f"*Key response considerations:* {q['key_response_considerations']}", "",
               "Answer:", "", "Evidence:", ""]
     return "\n".join(L)
 
@@ -131,7 +146,11 @@ def cbom_facts(bom, profile):
     for a in algos:
         a["auth"] = (a["ref"] in cert_refs or a["lane"] == "signature"
                      or bool({"sign", "verify"} & set(a["functions"])) or a["primitive"] == "signature")
-    return {"algorithms": algos, "certificates": certs, "protocols": protocols, "libraries": libs,
+    meta = (bom.get("metadata", {}) or {}).get("component", {}) or {}
+    coverage = next((p.get("value") for p in meta.get("properties", []) or []
+                     if p.get("name") == "pkic:profile:coverage"), None)
+    return {"coverage": coverage or "not declared",
+            "algorithms": algos, "certificates": certs, "protocols": protocols, "libraries": libs,
             "layers": sorted(layers | ({"protocol"} if protocols else set()) | ({"certificate"} if certs else set())),
             "by_ref": by_ref}
 
@@ -156,8 +175,67 @@ def _claim(a, key):
     return (a.get("claims") or {}).get(key)
 
 
+_TRUE = {"true", "yes", "y", "1"}
+_FALSE = {"false", "no", "n", "0", "none"}
+
+
+def _bool_claim(a, key):
+    """A true/false claim: True, False, or None when absent or not a yes/no answer. Strings such as "No" or
+    "false" count (before 1.5.0 only the JSON value false did, so "No" skipped every check)."""
+    v = _claim(a, key)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)) and v in (0, 1):
+        return bool(v)
+    if isinstance(v, str):
+        t = v.strip().lower().rstrip(".")
+        if t in _TRUE:
+            return True
+        if t in _FALSE:
+            return False
+    return None
+
+
+def _list_claim(a, key):
+    """A list-of-names claim: a JSON list, or a string of names separated by commas or semicolons (before, a
+    string was read one character at a time)."""
+    v = _claim(a, key)
+    if isinstance(v, str):
+        return [x.strip() for x in re.split(r"[,;\n]", v) if x.strip()]
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    return []
+
+
+def _answered(a):
+    return bool(str((a or {}).get("answer") or "").strip())
+
+
+def _complete(facts):
+    """Whether the CBOM declares complete coverage of its subject (PKI Consortium pkic:profile:coverage).
+    Absence of an algorithm in a partial CBOM says nothing about the product."""
+    return facts.get("coverage") == "complete"
+
+
+def _absence(facts, what):
+    """Status for a claim of absence that the CBOM does not contradict."""
+    if _complete(facts):
+        return _r("consistent", f"The CBOM, which declares complete coverage, shows {what}.")
+    return _r("not-evidenced", f"The CBOM shows {what}, but it declares {facts.get('coverage') or 'no'} coverage, "
+                               "so this does not show the product has none.")
+
+
+def _unclaimed(a, cbom_says):
+    """No usable true/false claim: never "consistent". Unanswered, or answered in prose only."""
+    if not _answered(a):
+        return _r("unanswered", "Not answered. " + cbom_says)
+    return _r("not-checked", "The answer gives no true/false claim, so it was not compared with the CBOM. "
+                             + cbom_says)
+
+
 def run_check(q, a, facts, ctx):
-    """One check result: consistent | contradicted | not-evidenced | no-cbom | missing-date | late | info."""
+    """One check result: consistent | contradicted | not-evidenced | not-checked | unanswered | no-cbom |
+    missing-date | late | info."""
     chk = q.get("check")
     if not chk:
         return None
@@ -171,6 +249,9 @@ def run_check(q, a, facts, ctx):
         return _r("consistent", f"`{key}` = {_claim(a, key)}, before the end of 2030 (not verifiable).")
     if facts is None:
         if chk == "cbom_supplied":
+            if _bool_claim(a, "cbom") is True:
+                return _r("contradicted", "The answer says a CBOM is supplied, but none was found at the "
+                                          "answers file's `cbom` path.")
             return _r("no-cbom", "No CBOM supplied.")
         return _r("no-cbom", "No CBOM to check against.")
     algos = facts["algorithms"]
@@ -182,7 +263,7 @@ def run_check(q, a, facts, ctx):
                   None: "PKI Consortium conformance not checked"}[conf]
         if n == 0:
             return _r("contradicted", "CBOM supplied but contains no cryptographic assets.")
-        return _r("consistent", f"CBOM supplied: {len(algos)} algorithm(s), {len(facts['certificates'])} "
+        return _r("consistent" if _answered(a) else "info", f"CBOM supplied (coverage: {facts['coverage']}): {len(algos)} algorithm(s), {len(facts['certificates'])} "
                                 f"certificate(s), {len(facts['protocols'])} protocol(s), "
                                 f"{len(facts['libraries'])} librar(ies); {conf_s}.")
     if chk == "cbom_layers":
@@ -190,12 +271,16 @@ def run_check(q, a, facts, ctx):
     if chk == "third_party_crypto":
         found = ctx.get("cmvp", [])
         libs = facts["libraries"]
-        claimed = _claim(a, "third_party_crypto")
+        claimed = _bool_claim(a, "third_party_crypto")
+        if claimed is None:
+            return _unclaimed(a, f"The CBOM lists {len(libs)} librar(ies).")
         if claimed is False and (found or libs):
             return _r("contradicted", f"Answer says no, but the CBOM lists {len(libs)} librar(ies)"
                                       + (f", including {', '.join(sorted({f['label'] for f in found}))}" if found else "")
                                       + ".")
         if not libs:
+            if claimed is False:
+                return _absence(facts, "no library components")
             return _r("not-evidenced", "The CBOM lists no library components, so inherited cryptography cannot "
                                        "be checked.")
         return _r("consistent", f"The CBOM lists {len(libs)} librar(ies)"
@@ -204,8 +289,10 @@ def run_check(q, a, facts, ctx):
     if chk in ("traditional_asymmetric", "auth_asymmetric"):
         vul = [x for x in algos if x["vulnerable"] is True and (chk == "traditional_asymmetric" or x["auth"])]
         key = "traditional_asymmetric" if chk == "traditional_asymmetric" else "traditional_asymmetric_auth"
-        claimed = _claim(a, key)
+        claimed = _bool_claim(a, key)
         names = ", ".join(sorted({x["name"] for x in vul})[:8])
+        if claimed is None:
+            return _unclaimed(a, f"The CBOM shows {names or 'no quantum-vulnerable algorithm'}.")
         if claimed is False and vul:
             return _r("contradicted", f"Answer says none, but the CBOM shows quantum-vulnerable "
                                       f"{'authentication ' if chk == 'auth_asymmetric' else ''}algorithms: {names}.")
@@ -214,11 +301,13 @@ def run_check(q, a, facts, ctx):
                                        "the CBOM may be incomplete.")
         if vul:
             return _r("consistent", f"CBOM shows: {names}.")
-        return _r("consistent", "The CBOM shows no quantum-vulnerable algorithm.")
+        return _absence(facts, "no quantum-vulnerable algorithm")
     if chk == "hybrid":
         hyb = sorted({x["name"] for x in algos if x["canonical"] and _HYBRID.search(x["canonical"])})
-        claimed = _claim(a, "hybrid")
+        claimed = _bool_claim(a, "hybrid")
         plan = _date(_claim(a, "pqc_only_date"))
+        if claimed is None and not hyb:
+            return _unclaimed(a, "No hybrid key establishment in the CBOM.")
         if claimed is False and hyb:
             return _r("contradicted", f"Answer says no hybrid support, but the CBOM shows {', '.join(hyb)}.")
         if hyb or claimed:
@@ -228,7 +317,7 @@ def run_check(q, a, facts, ctx):
             return _r("consistent", f"Hybrid treated as transitional; PQC-only planned {_claim(a, 'pqc_only_date')}.")
         return _r("info", "No hybrid key establishment in the CBOM.")
     if chk == "pqc_algorithms":
-        claimed = _claim(a, "pqc_algorithms") or []
+        claimed = _list_claim(a, "pqc_algorithms")
         in_cbom = {}
         for x in algos:
             if x["canonical"] and x["vulnerable"] is False and x["family"] in ("ML-KEM", "ML-DSA", "SLH-DSA", "LMS", "XMSS", "FN-DSA"):
@@ -238,6 +327,7 @@ def run_check(q, a, facts, ctx):
         for name in claimed:
             r = cnsa.classify(name, profile=ctx["profile"])
             if not r.get("canonical") or r.get("quantum_vulnerable") is not False:
+                missing.append(name)
                 rows.append(f"{name}: not a recognised quantum-resistant algorithm")
                 continue
             ok = "compliant" if r.get("priority") == "None" else f"below the `{ctx['profile']}` target ({r.get('cnsa_target')})"
@@ -253,6 +343,9 @@ def run_check(q, a, facts, ctx):
         ga = _date(_claim(a, "ga_date"))
         tail = "" if ga else " No `ga_date` given."
         if not claimed:
+            if not _answered(a):
+                return _r("unanswered", "Not answered." + (" The CBOM shows " + ", ".join(sorted(in_cbom)) + "."
+                                                          if in_cbom else ""))
             if in_cbom:
                 return _r("not-evidenced", "No algorithms listed in the answer, but the CBOM shows "
                                            + ", ".join(sorted(in_cbom)) + "." + tail)
@@ -301,9 +394,9 @@ def concerns(doc, answers, results, facts):
         if opaque:
             out.append(("use of proprietary or opaque cryptography",
                         "Unrecognised or non-standard algorithms in the CBOM: " + ", ".join(opaque[:10]) + "."))
-    if _claim(A.get("I6") or {}, "pqc_in_base_license") is False:
+    if _bool_claim(A.get("I6") or {}, "pqc_in_base_license") is False:
         out.append(("treatment of PQC as an optional or premium function", "I6: PQC is not in base licensing."))
-    if answered("A5") and not _claim(A.get("I1") or {}, "pqc_algorithms"):
+    if answered("A5") and not _list_claim(A.get("I1") or {}, "pqc_algorithms"):
         out.append(("over-reliance on compensating controls",
                     "Stronger traditional settings are offered (A5) but no PQC algorithms are committed (I1). "
                     "Larger classical keys do not address the risk from a CRQC."))
@@ -352,8 +445,9 @@ def report_md(res):
     answered = sum(1 for q in doc["questions"] if (A.get(q["id"]) or {}).get("answer", "").strip())
     L = [f"# Vendor PQC readiness: {ans.get('vendor') or '?'} {ans.get('product') or ''} {ans.get('version') or ''}".rstrip(),
          "",
-         f"Answers dated {ans.get('answered') or '?'}; verdict profile `{res['profile']}`. Questions: "
-         f"{doc['source']['title']} ({doc['source']['authors']}, {doc['source']['published']}; CC BY 4.0).",
+         f"Answers dated {ans.get('answered') or '?'}; verdict profile `{res['profile']}`.",
+         "",
+         "*" + attribution(doc) + "*",
          "",
          f"**{answered} of {len(doc['questions'])} questions answered.** Checks against the vendor's CBOM: "
          + (", ".join(f"{v} {k}" for k, v in sorted(counts.items())) or "none") + ".",
@@ -363,6 +457,10 @@ def report_md(res):
          ""]
     if not res["facts"]:
         L += ["> No CBOM was supplied, so no disclosure answer could be checked.", ""]
+    elif not _complete(res["facts"]):
+        L += [f"> The vendor's CBOM declares {res['facts']['coverage']} coverage, so an algorithm missing from it "
+              "may still be in the product: a claim that something is absent is \"not-evidenced\", never "
+              "\"consistent\".", ""]
     L += ["## Common concerns", ""]
     if res["concerns"]:
         L += [f"- **{c}:** {d}" for c, d in res["concerns"]]
@@ -397,7 +495,8 @@ def summary(res):
             "answered": sum(1 for q in res["doc"]["questions"] if (A.get(q["id"]) or {}).get("answer", "").strip()),
             "questions": len(res["doc"]["questions"]), "checks": counts,
             "contradicted": sorted(k for k, v in res["results"].items() if v["status"] == "contradicted"),
-            "concerns": [c for c, _ in res["concerns"]], "cbom": bool(res["facts"])}
+            "concerns": [c for c, _ in res["concerns"]], "cbom": bool(res["facts"]),
+            "cbom_coverage": res["facts"]["coverage"] if res["facts"] else None}
 
 
 def main(argv=None):

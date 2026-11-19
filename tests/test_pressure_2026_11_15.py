@@ -75,7 +75,8 @@ class IncompleteEvidence(unittest.TestCase):
         bom = view(lambda b: (b.add_certificate(cert("a.example")),
                               b.add_tls_kex("a.example", None, "TLSv1.3", "TLS_AES_256_GCM_SHA384")))
         md, summary = report.build_report(bom)
-        self.assertEqual(summary["grade"], "Incomplete")
+        self.assertTrue(summary["incomplete"])
+        self.assertIsNone(summary["grade"])
         self.assertEqual(summary["kex_unobserved"], 1)
         self.assertIn("Incomplete: key exchange not observed on 1 of 1", md)
         self.assertNotIn("almost entirely quantum-vulnerable", md)
@@ -84,7 +85,7 @@ class IncompleteEvidence(unittest.TestCase):
         bom = view(lambda b: (b.add_certificate(cert("a.example")),
                               b.add_tls_kex("a.example", "X25519MLKEM768", "TLSv1.3", "TLS_AES_256_GCM_SHA384")))
         _, summary = report.build_report(bom)
-        self.assertNotEqual(summary["grade"], "Incomplete")
+        self.assertFalse(summary["incomplete"])
 
 
 class ReportText(unittest.TestCase):

@@ -49,7 +49,10 @@ PRIORITY_ORDER = {"Critical": 0, "High": 1, "Low": 2, "None": 3, "Review": 4}
 # (cnsa2:config). Terminal escape sequences and other control bytes are removed first.
 _MD_UNSAFE = (("\\", "\\\\"), ("\r", " "), ("\n", " "), ("\t", " "), ("|", "&#124;"), ("<", "&lt;"),
               (">", "&gt;"), ("](", "]&#40;"), ("`", "&#96;"))
-_CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]")
+# Control bytes, terminal escapes, line/paragraph separators, and (1.5.0) the invisible and bidirectional
+# formatting characters (zero-width, LRM/RLM, LRE..RLO, LRI..PDI, BOM, tag characters).
+_CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029"
+                      r"\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
 
 
 def md_text(v):
@@ -202,16 +205,19 @@ def score_summary(bom, regime=None):
     score = round(100 * num / scored) if scored else None
 
     lanes = {}
+    # membership by identity: `a in vuln` compared whole dicts, quadratic on a large CBOM (an MCP summarize of
+    # a 2 MB CBOM took ~50 s)
+    vuln_ids, compliant_ids, transitional_ids = ({id(a) for a in xs} for xs in (vuln, compliant, transitional))
     for a in algos:
         d = lanes.setdefault(a["lane"], {"compliant": 0, "transitional": 0, "vulnerable": 0,
                                          "broken": 0, "review": 0})
         if a["priority"] == "Critical":
             d["broken"] += a["weight"]
-        elif a in vuln:
+        elif id(a) in vuln_ids:
             d["vulnerable"] += a["weight"]
-        elif a in compliant:
+        elif id(a) in compliant_ids:
             d["compliant"] += a["weight"]
-        elif a in transitional:
+        elif id(a) in transitional_ids:
             d["transitional"] += a["weight"]
         else:
             d["review"] += a["weight"]
@@ -223,7 +229,10 @@ def score_summary(bom, regime=None):
                       if any((p.get("name") == "pkic:profile:disclosure:keyExchange" and p.get("value") == "unknown")
                              or (p.get("name") == "pkic:profile:keyExchange" and p.get("value") == "unparsed-kex-group")
                              for p in c.get("properties", []))]
-    return {"interfaces": len(tls), "kex_unobserved": kex_unobserved, "score": score, "resistant": resistant, "compliant": compliant, "transitional": transitional,
+    kex_pq = [c["name"] for c in tls
+              if any(p.get("name") == "pkic:profile:keyExchange" and "mlkem" in (p.get("value") or "").lower()
+                     for p in c.get("properties", []))]
+    return {"interfaces": len(tls), "kex_unobserved": kex_unobserved, "kex_pq": kex_pq, "score": score, "resistant": resistant, "compliant": compliant, "transitional": transitional,
             "vuln": vuln, "review": review, "scored": scored, "lanes": lanes,
             "profile": profiles[0] if len(profiles) == 1 else ("mixed" if profiles else None)}
 
@@ -480,18 +489,36 @@ def classical_fallback(bom):
     return rows
 
 
-def grade(score):
-    if score is None:
-        return "N/A", "no scored public-key usages found"
-    if score >= 90:
-        return "A: PQC-ready", "the estate is largely on quantum-resistant cryptography"
-    if score >= 70:
-        return "B: On track", "a minority of assets remain quantum-vulnerable"
-    if score >= 40:
-        return "C: Partial", "roughly half the scored public-key usages are quantum-vulnerable"
-    if score >= 15:
-        return "D: At risk", "most scored public-key usages are quantum-vulnerable"
-    return "F: Not started", "the estate is almost entirely quantum-vulnerable"
+DISCLAIMER = ("The readiness score is this toolkit's own measure of the cryptography this scan observed. It is not "
+              "a compliance determination: not an ATO, a FedRAMP authorization, a claim of FISMA compliance, a FIPS "
+              "140-3 validation or a PKI Consortium PQCMM level.")
+
+
+def scope_statement(mp):
+    """What this scan covered, from the CBOM's capture record, and that it is not an estate inventory."""
+    capture = (mp.get("fedlin:scope_covered") or mp.get("fedlin:capture") or "what this scan was pointed at").rstrip(".")
+    return (f"{capture}. Only what this scan was pointed at: not an inventory of all the cryptography the "
+            "organization runs")
+
+
+def observed_note(s):
+    """What was observed, in plain terms, in place of a letter grade (retired in 1.5.0: a grade read as a ruling
+    and could not carry its scope). Counts only; no judgement beyond the verdicts."""
+    if s["score"] is None:
+        return "no public-key usages were scored"
+    parts = []
+    if s["interfaces"]:
+        parts.append(f"post-quantum key exchange negotiated on {len(s['kex_pq'])} of {s['interfaces']} TLS "
+                     "endpoint(s)")
+    for lane, label in (("signature", "signature"), ("public-key", "public-key (certificate key)"),
+                        ("key-establishment", "key-establishment")):
+        d = s["lanes"].get(lane)
+        if not d:
+            continue
+        total = d["compliant"] + d["transitional"] + d["vulnerable"] + d["broken"]
+        if total:
+            parts.append(f"{d['compliant'] + d['transitional']} of {total} {label} usage(s) quantum-resistant")
+    return "; ".join(parts) or "public-key usages were scored; see the table below"
 
 
 def _findings_table(vuln, review, resistant, cap, profile):
@@ -522,12 +549,12 @@ def _findings_table(vuln, review, resistant, cap, profile):
         L.append(f"**{len(review)} algorithm(s) could not be classified** and are flagged **Low confidence "
                  f"needs analyst**: {', '.join(sorted({a['name'] for a in review}))}.")
         L.append("")
-    L.append("### Not included in this report")
+    L.append("### Limits of these findings")
     L.append("")
-    L.append("- Migration sequencing against the NIST IR 8547 timeline, by data lifetime and "
+    L.append("- They are not sequenced into a migration plan against the NIST IR 8547 timeline, data lifetime or "
              "harvest-now-decrypt-later exposure.")
-    L.append("- Analyst verification of Low-confidence and Review findings.")
-    L.append("- Owner assignments, a signed attestation, and baseline-to-baseline deltas.")
+    L.append("- Low-confidence and Review findings have not been verified by an analyst.")
+    L.append("- No owners are assigned, and the report is not signed.")
     L.append("")
     compliant_named = sorted({_mark(a) for a in resistant if a["priority"] == "None"})
     if compliant_named:
@@ -544,18 +571,20 @@ def _findings_table(vuln, review, resistant, cap, profile):
     return L
 
 
-def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None, attention=None):
+def build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None, attention=None,
+                 signer=None):
     """(Markdown report, summary). The Markdown is built from a copy of the CBOM whose every string is inert
     (md_text), so no CBOM string can change its structure; the summary is built from the CBOM as is, so machine
     outputs (summary.json, the MCP server) keep the values unaltered."""
     kw = dict(self_serve=self_serve, brand=brand, signed=signed, attestation_name=attestation_name,
-              attention=attention)
+              attention=attention, signer=signer)
     md, _ = _build_report(_inert(bom), **kw)
     _, summary = _build_report(bom, **kw)
     return md, summary
 
 
-def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None, attention=None):
+def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestation_name=None, attention=None,
+                  signer=None):
     mp = meta_props(bom)
     sysname = bom.get("metadata", {}).get("component", {}).get("name", "system")
     ts = bom.get("metadata", {}).get("timestamp", "")
@@ -571,13 +600,12 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
     profile_label = {"civilian": "NIST FIPS 203/204/205 + IR 8547 (civilian profile)",
                      "nss": "NSA CNSA 2.0 (nss profile)"}.get(profile, f"{profile} profile")
     cap = [a for a in algos if a.get("capability")]
-    g, gnote = grade(score)
+    gnote = observed_note(s)
     incomplete = s["kex_unobserved"]
     if incomplete and score is not None:
-        # An unobserved key exchange is not evidence of a classical one: no letter grade on partial evidence.
-        g = "Incomplete"
-        gnote = (f"key exchange was not observed on {len(incomplete)} of {s['interfaces']} TLS endpoint(s), "
-                 "so this score covers only what was observed")
+        # An unobserved key exchange is not evidence of a classical one: the score is marked partial.
+        gnote = (f"incomplete: key exchange was not observed on {len(incomplete)} of {s['interfaces']} TLS "
+                 f"endpoint(s), so this score covers only what was observed; {gnote}")
     tp = transport_posture(mp)
     cposture = cert_posture(bom)
     hw = hardware_components(bom)
@@ -604,9 +632,12 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
     L.append(f"*Generated by fedlin-pqc-toolkit report stage from a CycloneDX 1.6 CBOM. "
              f"CBOM timestamp: {ts or 'n/a'}.*")
     L.append("")
+    L.append(f"> **Scope:** {scope_statement(mp)}.  ")
+    L.append(f"> **Not a compliance determination.** {DISCLAIMER}")
+    L.append("")
     if incomplete:
         L.append(f"> **Incomplete: key exchange not observed on {len(incomplete)} of {s['interfaces']} TLS "
-                 "endpoint(s).** The score is partial and carries no grade. Either the key exchange could not be "
+                 "endpoint(s).** The score is partial. Either the key exchange could not be "
                  "read (a group the scan does not know, or one the enumeration contradicted: listed below if so), "
                  "or the scan host could not offer it: a FIPS-mode OpenSSL cannot offer post-quantum key "
                  "exchange, so run `./setup.sh` to build the probe image, then scan again.")
@@ -623,8 +654,12 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
     if not self_serve:
         expired = cposture["buckets"]["expired"]
         soon = cposture["buckets"]["d30"] + cposture["buckets"]["d90"]
-        bits = [f"**{score if score is not None else 'N/A'}"
-                f"{'/100' if score is not None else ''} ({g})** on post-quantum readiness"]
+        bits = [f"a readiness score of **{score if score is not None else 'N/A'}"
+                f"{'/100' if score is not None else ''}**"
+                f"{' (incomplete)' if incomplete and score is not None else ''}"
+                " (toolkit measure, not a compliance determination)"]
+        if score is not None and s["interfaces"]:
+            bits.append(f"post-quantum key exchange on {len(s['kex_pq'])} of {s['interfaces']} TLS endpoint(s)")
         pk_total = _w(pk(compliant)) + _w(pk(transitional)) + _w(pk(vuln))
         if pk_total:
             bits.append(f"{_w(pk(vuln))} of {pk_total} public-key usages are quantum-vulnerable")
@@ -638,13 +673,14 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
             bits.append(f"{soon} certificate(s) expire within 90 days")
         L.append("## Bottom line")
         L.append("")
-        L.append(f"**{sysname}** scores " + "; ".join(bits) + ".")
+        L.append(f"**{sysname}** has " + "; ".join(bits) + ".")
         L.append("")
         if score is None:
             lead = ("No algorithm assets were assessed in this capture: the score is not applicable. "
                     "Extend the scan (runtime/endpoint/source) before drawing a readiness conclusion.")
         elif score >= 70:
-            lead = "The estate is largely quantum-ready: the work is hardening and monitoring."
+            lead = ("Most public-key usages this scan scored are quantum-resistant: the work is hardening and "
+                    "monitoring.")
         else:
             lead = ("Quantum-vulnerable public-key cryptography is the dominant exposure"
                     + ("; the roadmap below sequences the migration." if _roadmap is not None else "."))
@@ -658,8 +694,8 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
     # ---- executive scorecard ----
     L.append("## Executive scorecard")
     L.append("")
-    L.append(f"**PQC-readiness score: {score if score is not None else 'N/A'}"
-             f"{'/100' if score is not None else ''}, grade {g}.** {gnote[:1].upper() + gnote[1:]}.")
+    L.append(f"**Readiness score: {score if score is not None else 'N/A'}"
+             f"{'/100' if score is not None else ''}.** {gnote[:1].upper() + gnote[1:]}.")
     L.append("")
     L.append("| Measure | Value |")
     L.append("|---|---|")
@@ -715,7 +751,7 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
     if scope_covered or scope_not:
         parts = []
         if scope_covered:
-            parts.append(f"**Covered:** {scope_covered}.")
+            parts.append(f"**Covered (partial: only what this scan was pointed at):** {scope_covered}.")
         if scope_not:
             parts.append(f"**Not in scope: expand assessment to reach:** {scope_not}.")
         L.append("  ".join(parts))
@@ -1107,18 +1143,28 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
     L.append("")
 
     # ---- attestation & integrity (only when the toolkit actually signed the deliverable) ----
-    if signed:
+    # The signer is named by the key that signs (signer = {"publicKeyId", "fedlin"}), never assumed: "FEDLIN"
+    # appears only when that key is FEDLIN's published one (1.5.0).
+    if signed and signer and signer.get("publicKeyId"):
         att = attestation_name or "the attached attestation file"
+        kid = str(signer["publicKeyId"])
         L.append("## Attestation & integrity")
         L.append("")
         L.append("This report and its CycloneDX 1.6 CBOM are covered by a **detached SLH-DSA (FIPS 205) "
                  "attestation**: `" + att + "`: binding the SHA-256 of each artifact and signed with a "
-                 "quantum-resistant hash-based signature. A recipient can prove that neither the report nor the "
-                 "CBOM was altered after FEDLIN signed it, and that it was signed by FEDLIN's holder of the "
-                 "published signing key.")
+                 "quantum-resistant hash-based signature by the key with ID `" + kid + "`. A recipient can prove "
+                 "that neither the report nor the CBOM was altered after signing, and that this key signed them.")
         L.append("")
-        L.append("Verify with the toolkit: `python3 sign.py verify " + att + "` "
-                 "(re-hashes the artifacts and checks the signature; exit 0 = intact).")
+        if signer.get("fedlin"):
+            L.append("This is **FEDLIN's published signing key**. FEDLIN publishes its key ID and public key in "
+                     "SECURITY.md of https://github.com/fedlinllc/fedlin-pqc-toolkit: compare it with the key ID "
+                     "the verifier prints.")
+        else:
+            L.append("This is **not FEDLIN's published signing key**: the signature shows only that whoever holds "
+                     "this key signed these files. FEDLIN has not signed or reviewed them.")
+        L.append("")
+        L.append("Verify: `python3 sign.py verify " + att + "` re-hashes the artifacts, checks the signature and "
+                 "prints the signing key's ID (exit 0 = intact and signed by FEDLIN's published key).")
         L.append("")
         L.append("*SLH-DSA here provides commercial document-integrity signing of the deliverable: it is FIPS 205, "
                  "quantum-resistant, and distinct from the CNSA 2.0/NSS signing targets (ML-DSA-87, LMS/XMSS) named "
@@ -1129,8 +1175,16 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
         "system": sysname,
         "cbom_timestamp": ts,
         "readiness_score": score,
-        "grade": g,
+        "grade": None,                    # letter grades retired in 1.5.0; the key stays (STABILITY.md)
+        "incomplete": bool(incomplete) and score is not None,
         "kex_unobserved": len(incomplete),
+        "tls_endpoints": s["interfaces"],
+        "tls_endpoints_pq_kex": len(s["kex_pq"]),
+        "scope": {"mode": mp.get("fedlin:mode"), "capture": mp.get("fedlin:capture"),
+                  "endpoints_supplied": int(mp["fedlin:endpoints_supplied"])
+                  if str(mp.get("fedlin:endpoints_supplied", "")).isdigit() else None,
+                  "coverage": "partial", "statement": scope_statement(mp)},
+        "disclaimer": DISCLAIMER,
         "profile": profile,
         "public_key_usages_scored": scored,
         "lanes": s["lanes"],
@@ -1273,8 +1327,8 @@ def main():
     ap.add_argument("--context", default="",
                     help="business context (fedlin.pqc-context 1.0): attention order and urgency in the report")
     ap.add_argument("--self-serve", action="store_true",
-                    help="gated automated-scan variant (disclaimer, confidence bands, roadmap withheld)")
-    ap.add_argument("--brand", default="FEDLIN", help="white-label the deliverable under a reseller's name")
+                    help="automated-scan variant of the report (automated-scan disclaimer, confidence bands)")
+    ap.add_argument("--brand", default="FEDLIN", help="name the report is issued under")
     ap.add_argument("--attestation-name", default="",
                     help="name of an EXISTING, VALID detached SLH-DSA attestation file: adds the integrity "
                          "section only if that attestation exists and its signature verifies (deliverable is "
@@ -1299,7 +1353,7 @@ def main():
 
     # Only claim a signature if the named attestation actually exists and its signature verifies:
     # never assert "signed by FEDLIN" from the flag alone (claim discipline).
-    signed = False
+    signed, signer = False, None
     if args.attestation_name:
         att_path = os.path.join(os.path.dirname(os.path.abspath(out)), args.attestation_name)
         if not os.path.exists(att_path):
@@ -1309,11 +1363,12 @@ def main():
             try:
                 import sign as signmod
                 _ok, detail = signmod.verify_attestation(att_path, node_bin=args.node)
-                if detail.get("signature_valid"):
+                if _ok:
                     signed = True
+                    signer = {"publicKeyId": detail.get("publicKeyId"), "fedlin": bool(detail.get("fedlin_key"))}
                 else:
-                    sys.stderr.write(f"[warn] {args.attestation_name}: signature did not verify; emitting an "
-                                     "UNSIGNED report (no signature claim).\n")
+                    sys.stderr.write(f"[warn] {args.attestation_name}: signature did not verify or the artifacts "
+                                     "changed; emitting an UNSIGNED report (no signature claim).\n")
             except Exception as e:
                 sys.stderr.write(f"[warn] could not verify {args.attestation_name} ({e}); emitting an UNSIGNED "
                                  "report.\n")
@@ -1342,11 +1397,11 @@ def main():
             sys.stderr.write(f"[error] --context: {e}\n")
             sys.exit(2)
     md, summary = build_report(bom, self_serve=args.self_serve, brand=args.brand,
-                               signed=signed,
+                               signed=signed, signer=signer,
                                attestation_name=args.attestation_name or None, attention=attention)
     with open(out, "w") as f:
         f.write(md + "\n")
-    print(f"[ok] report: {out}: score {summary['readiness_score']} ({summary['grade']}), "
+    print(f"[ok] report: {out}: score {summary['readiness_score']}{' (incomplete)' if summary['incomplete'] else ''}, "
           f"algorithms (all lanes): {summary['quantum_vulnerable']} vulnerable / {summary['quantum_resistant']} resistant")
     if args.html:
         html_out = args.html if args.html != "auto" else out.replace(".md", ".html")

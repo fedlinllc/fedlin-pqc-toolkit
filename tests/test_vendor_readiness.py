@@ -130,5 +130,88 @@ class Assess(unittest.TestCase):
         self.assertEqual(vr.summary(res)["contradicted"], ["A1"])
 
 
+
+class Fixes20261119(unittest.TestCase):
+    """fedlin-website stranger test of vendor_readiness, 2026-11-19: attribution and false "consistent"."""
+    run_case = Assess.run_case
+
+    def setUp(self):
+        self.doc = vr.load_questions()
+
+    def test_questionnaire_carries_cc_by_attribution(self):
+        md = vr.questionnaire_md(self.doc)
+        for want in ("(c) Commonwealth of Australia 2026", "https://creativecommons.org/licenses/by/4.0/",
+                     "media.defense.gov", "Changes:", "have not reviewed or endorsed",
+                     "*Key response considerations:*"):
+            self.assertIn(want, md)
+        self.assertNotIn("What a strong answer includes", md)
+
+    def test_report_carries_attribution(self):
+        res = self.run_case({"answers": {}})
+        self.assertIn("(c) Commonwealth of Australia 2026", vr.report_md(res))
+
+    def test_string_claims_are_checked(self):
+        for no in ("false", "No", "no.", "none"):
+            res = self.run_case({"answers": {"A1": {"answer": "none", "claims": {"traditional_asymmetric": no}}}},
+                                [algo("a/1", "ECDSA", ["sign"])])
+            self.assertEqual(res["results"]["A1"]["status"], "contradicted", no)
+        res = self.run_case({"answers": {"T3": {"answer": "no", "claims": {"hybrid": "no"}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        self.assertEqual(res["results"]["T3"]["status"], "contradicted")
+        res = self.run_case({"answers": {"I6": {"answer": "add-on", "claims": {"pqc_in_base_license": "No"}}}})
+        self.assertIn("treatment of PQC as an optional or premium function", [c for c, _ in res["concerns"]])
+
+    def test_algorithm_list_as_string(self):
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": "ML-KEM-768, ML-DSA-65",
+                                                                          "ga_date": "2026-06"}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        d = res["results"]["I1"]["detail"]
+        self.assertIn("ML-KEM-768:", d)
+        self.assertIn("ML-DSA-65: compliant; not in the CBOM", d)
+        self.assertEqual(res["results"]["I1"]["status"], "not-evidenced")
+
+    def test_unknown_claimed_algorithm_is_not_consistent(self):
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["QuantumShield-9000"],
+                                                                          "ga_date": "2026-06"}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        self.assertEqual(res["results"]["I1"]["status"], "not-evidenced")
+
+    def test_unanswered_is_never_consistent(self):
+        res = self.run_case(vr.template(self.doc), [algo("a/1", "X25519MLKEM768"), algo("a/2", "ECDSA", ["sign"])])
+        self.assertNotIn("consistent", [r["status"] for r in res["results"].values()])
+        self.assertEqual(res["results"]["A1"]["status"], "unanswered")
+
+    def test_prose_only_answer_is_not_checked(self):
+        res = self.run_case({"answers": {"A1": {"answer": "We use modern cryptography."}}}, [algo("a/1", "RSA")])
+        self.assertEqual(res["results"]["A1"]["status"], "not-checked")
+
+    def test_l1_claim_without_cbom(self):
+        res = self.run_case({"answers": {"L1": {"answer": "yes", "claims": {"cbom": True}}}})
+        self.assertEqual(res["results"]["L1"]["status"], "contradicted")
+
+    def test_partial_cbom_does_not_prove_absence(self):
+        comps = [algo("a/1", "ML-KEM-768"), algo("a/2", "ML-DSA-65", ["sign"])]
+        res = self.run_case({"answers": {"A1": {"answer": "none", "claims": {"traditional_asymmetric": False}},
+                                         "A6": {"answer": "none", "claims": {"traditional_asymmetric_auth": False}}}},
+                            comps)
+        self.assertEqual(res["results"]["A1"]["status"], "not-evidenced")
+        self.assertEqual(res["results"]["A6"]["status"], "not-evidenced")
+        self.assertIn("coverage", vr.report_md(res))
+
+    def test_complete_cbom_can_support_absence(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "cbom.json"), "w") as f:
+                json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6",
+                           "metadata": {"component": {"name": "p", "properties": [
+                               {"name": "pkic:profile:coverage", "value": "complete"}]}},
+                           "components": [algo("a/1", "ML-KEM-768")]}, f)
+            p = os.path.join(d, "a.json")
+            with open(p, "w") as f:
+                json.dump({"cbom": "cbom.json", "answers": {
+                    "A1": {"answer": "none", "claims": {"traditional_asymmetric": False}}}}, f)
+            res = vr.assess(p, "civilian")
+        self.assertEqual(res["results"]["A1"]["status"], "consistent")
+
+
 if __name__ == "__main__":
     unittest.main()

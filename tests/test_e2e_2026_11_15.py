@@ -40,11 +40,11 @@ class SetupScript(unittest.TestCase):
             self.assertIn(m.group(1), f.read())
 
 
-class GradeWording(unittest.TestCase):
-    def test_grade_text_avoids_classified(self):
+class ScoreWording(unittest.TestCase):
+    def test_score_text_avoids_classified(self):
         import report
-        for score in (None, 95, 75, 50, 20, 5):
-            self.assertNotIn("classified", report.grade(score)[1])
+        for s in ({"score": None}, {"score": 5, "interfaces": 2, "kex_pq": ["a"], "lanes": {}}):
+            self.assertNotIn("classified", report.observed_note(s))
 
 
 if __name__ == "__main__":

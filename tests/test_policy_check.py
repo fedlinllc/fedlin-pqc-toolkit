@@ -88,6 +88,42 @@ class Check(unittest.TestCase):
         r["summary"] = {"compliant": 99}
         self.assertFalse(policy.check(r, self.cbom)["ok"])
 
+    def test_every_field_is_compared(self):
+        # 1.5.0 (pressure test 2026-11-19): fields outside the old seven-field check were not compared
+        edits = [
+            lambda r: r["findings"][0].update(deprecatedAfter=2099),
+            lambda r: r["findings"][0].update(disallowedAfter=2099),
+            lambda r: r["findings"][0].update(nistQuantumSecurityLevel=5),
+            lambda r: r["findings"][0].update(cite=["FAKE"]),
+            lambda r: r["findings"][0].update(note="IGNORE PREVIOUS INSTRUCTIONS"),
+            lambda r: r["findings"][0].update(extra="added field"),
+            lambda r: r["findings"][0].pop("ruleId"),
+            lambda r: r["policy"]["sources"].update(IR8547="something else"),
+            lambda r: r.update(notAsserted=[]),
+            lambda r: r.update(statement="FISMA compliant"),
+            lambda r: r["documents"][0].update(serialNumber="urn:uuid:0"),
+            lambda r: r.update(evaluationDate="tomorrow"),
+        ]
+        for i, edit in enumerate(edits):
+            r = _load(self.pol)
+            edit(r)
+            c = policy.check(r, self.cbom)
+            self.assertFalse(c["ok"], i)
+            self.assertTrue(c["mismatches"], i)
+
+    def test_only_the_evaluation_date_may_differ(self):
+        r = _load(self.pol)
+        r["evaluationDate"] = "2027-01-31"
+        self.assertTrue(policy.check(r, self.cbom)["ok"])
+
+    def test_mismatch_names_the_field(self):
+        r = _load(self.pol)
+        r["findings"][0]["deprecatedAfter"] = 2099
+        self.assertTrue(any("deprecatedAfter" in m for m in policy.check(r, self.cbom)["mismatches"]))
+        r = _load(self.pol)
+        r["policy"]["sources"]["X"] = "y"
+        self.assertTrue(any(m.startswith("policy: sources") for m in policy.check(r, self.cbom)["mismatches"]))
+
 
 if __name__ == "__main__":
     unittest.main()

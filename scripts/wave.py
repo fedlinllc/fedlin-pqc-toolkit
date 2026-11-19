@@ -597,7 +597,10 @@ _MD_UNSAFE = (("\\", "\\\\"), ("\r", " "), ("\n", " "), ("|", "\\|"), ("<", "&lt
               ("`", "&#96;"))
 
 
-_CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]")
+# Control bytes, terminal escapes, line/paragraph separators, and (1.5.0) the invisible and bidirectional
+# formatting characters (zero-width, LRM/RLM, LRE..RLO, LRI..PDI, BOM, tag characters).
+_CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029"
+                      r"\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
 
 
 def md_text(v):

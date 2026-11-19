@@ -92,9 +92,10 @@ RUN --mount=type=bind,target=/tmp/ctx \
     mkdir -p /licenses \
  && if [ -f /tmp/ctx/LICENSE ]; then src=/tmp/ctx/LICENSE; else src=/tmp/ctx/public/LICENSE; fi \
  && cp "$src" /licenses/fedlin-pqc-toolkit.LICENSE \
+ && cp "$(dirname "$src")/NOTICE" /licenses/fedlin-pqc-toolkit.NOTICE \
  && for d in third_party/*/; do cp "$d/LICENSE" "/licenses/third_party-$(basename "$d").LICENSE"; done \
  && printf '%s\n' \
-      'fedlin-pqc-toolkit: Apache-2.0 (fedlin-pqc-toolkit.LICENSE).' \
+      'fedlin-pqc-toolkit: Apache-2.0 (fedlin-pqc-toolkit.LICENSE, notice in fedlin-pqc-toolkit.NOTICE).' \
       'third_party-*.LICENSE: licences of the vendored CycloneDX, PKI Consortium and musl files.' \
       'Bundled tools (each under its own licence): oc/kubectl (Apache-2.0), cyclonedx-cli (Apache-2.0),' \
       'cdxgen (Apache-2.0), cbomkit-theia (Apache-2.0), OpenSSL 3.5 key-exchange probe (Apache-2.0),' \

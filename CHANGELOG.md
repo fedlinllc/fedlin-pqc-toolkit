@@ -11,6 +11,90 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-19
+
+Ruleset 1.0.5 (control mapping only; no verdict or score changes, see CORRECTIONS.md). Behaviour changes for
+anyone scripting the pipeline: a run that assessed nothing exits `2`; a source flag no longer scans the current
+cluster (add `--cluster`); the report has no letter grade (`summary.json` `grade` is `null`).
+
+### Added
+- **NOTICE and TRADEMARKS.md.** A NOTICE file, which Apache-2.0 redistributions must keep (also shipped in the
+  image as `/licenses/fedlin-pqc-toolkit.NOTICE`), and a trademark policy: you may say your work uses the
+  toolkit and keep the names it writes into its outputs, but you may not suggest FEDLIN performed, reviewed
+  or endorsed it.
+
+### Changed
+- **No letter grade; the report leads with scope and a disclaimer.** A report opened with, for example,
+  "14/100 (F: Not started) … the estate is almost entirely quantum-vulnerable" for three listed hosts, one of
+  them already negotiating ML-KEM, and the "not a compliance determination" note came about 150 lines later.
+  Because no public CA issues post-quantum certificates yet, almost any public site scored F. The report now
+  opens with what the scan covered (only what it was pointed at, not an inventory of the organization) and
+  that the score is the toolkit's own measure, not a compliance determination. The score is given as a
+  number with what was observed (post-quantum key exchange on N of M TLS endpoints, quantum-resistant usages
+  per public-key lane), and "Covered" is marked partial. `summary.json` keeps the `grade` key, now always
+  `null`, and adds `incomplete` (which replaces `grade: "Incomplete"`), `tls_endpoints`,
+  `tls_endpoints_pq_kex`, `scope` and `disclaimer`.
+- **A source flag no longer scans the current cluster or this host's sshd.** Before, any run without
+  `--no-runtime` used the cluster of the current kube context (route or ingress capture, cluster-wide
+  secret counts) and ran `sudo -n sshd -T` on the scan host, so a quick start adapted without
+  `--no-runtime` scanned whatever cluster the user was logged into and mixed the scan host's SSH settings
+  into an endpoint report. Now a run with `--endpoints`, `--repo`, `--theia-dir`, `--theia-image` or
+  `--merge-cbom` scans only those sources. The new `--cluster` flag adds the cluster, and the new
+  `--local-ssh` flag adds this host's SSH configuration (and stops with exit `2` if it cannot be read).
+  `--deep`, `--debug-image` and `--kube-cli` in such a run need `--cluster`, and `--cluster --no-runtime`
+  is refused. A run with none of those source flags behaves as before (cluster plus local SSH) and now
+  names the kube context it is about to scan. `--no-runtime` keeps its meaning.
+  If you relied on `--endpoints` or `--repo` adding to a cluster scan, add `--cluster` (and `--local-ssh`).
+
+### Fixed
+- **Vendor readiness: CC BY 4.0 attribution.** The questionnaire and the assessment report now give the full
+  attribution for the ASD/CISA/NSA questions: copyright, licence link, source, the changes made, and that the
+  agencies have not endorsed the tool. NOTICE says the same. The questionnaire's "What a strong answer
+  includes" heading is back to the publication's "Key response considerations".
+- **Vendor readiness: no false "consistent".** A claim written as text ("No", "false") was skipped, so real
+  contradictions read "consistent"; it is now read as true/false. An algorithm list given as a string was read
+  one character at a time; it is split on commas. An unrecognised claimed algorithm now counts against the
+  answer. An unanswered question is "unanswered" and a prose-only answer "not-checked" instead of
+  "consistent". L1 now reads its `cbom` claim. A claim that something is absent is "consistent" only when the
+  CBOM declares complete coverage; a partial CBOM gives "not-evidenced", and the report says so. The summary
+  gains `cbom_coverage`.
+- **Input checks.** `--regime` accepts only the six regimes it knows (any case) and refuses others, which were
+  silently ignored; ports outside 1-65535 are refused; a bare IPv6 address (`2001:db8::1`) is accepted, not
+  only the `[2001:db8::1]` form.
+- **Default name.** Without `--name`, the system is named after the first endpoint (or the `--repo` /
+  `--theia-dir` folder) instead of "openshift-cluster"; a cluster scan keeps "openshift-cluster".
+- **Invisible and bidirectional characters** (zero-width, LRM/RLM, the embedding, override and isolate
+  controls, BOM, tag characters) are removed from CBOM strings in report, wave and context Markdown, as the
+  MCP server already did, so a certificate field cannot make text read differently from what it is.
+- **MCP server.** A request nested too deeply to parse is answered with a parse error instead of stopping the
+  server, and summarizing a large CBOM is no longer quadratic (10,000 components: report 18 s to 1.3 s).
+- **Wording.** The report's "Not included in this report" list is now "Limits of these findings", and the
+  engagement-kit flags' help no longer reads as sales copy. The README shows how to register the MCP server
+  in Claude Code and other clients, and how verdict lookup matches names.
+- **Ruleset 1.0.5: cipher suites cite SC-8, not SC-28.** TLS and SSL cipher suites and OpenSSH ciphers carried
+  SC-28 (data at rest) from their bare cipher; they now cite SC-8 (data in transit). Verdicts, priorities and
+  scores are unchanged; see CORRECTIONS.md.
+- **A signed report names the key that signed it.** The attestation section said the report was "signed by
+  FEDLIN's holder of the published signing key", although no key was published, and it said so for any key
+  that signed. The section now names the signing key's ID and says it is FEDLIN's published key only when it
+  is; otherwise it says FEDLIN has not signed or reviewed the files. FEDLIN's key ID and public key are now
+  in SECURITY.md. (Signing itself is part of the engagement kit, not this build.)
+- **`policy.py verify` compares the whole policy result.** It compared only seven fields of each finding
+  (status, target, quantum vulnerability, priority, controls, lane, canonical name), so deprecation and
+  disallow dates, security levels, citations, notes, the policy's source texts, `notAsserted` and the
+  document record could be changed and verify still printed `[ok]`. It now re-evaluates the CBOM with the
+  result's profile and crosswalk regime and compares every field; only `evaluationDate` may differ (it must
+  still be a date). A mismatch names the field. A result written by an earlier toolkit version with the same
+  ruleset can now fail verify if the result's fields changed shape; the report and the MCP server then
+  evaluate the CBOM again, as they do for any result that fails.
+- **A run that assessed nothing no longer exits 0.** The pipeline printed `[ok]` lines, wrote an empty CBOM
+  and report, and exited 0 when no `--endpoints` entry completed a handshake, when a hosts file name was
+  mistyped (it was scanned as a hostname), when `--repo` ran without cdxgen, when cbomkit-theia failed, or when
+  a `--merge-cbom` input was dropped because cyclonedx-cli was missing. A CI gate read each of these as a pass.
+  Each now stops with exit code `2`, an `[error]` line naming the cause, and no CBOM, policy result or report.
+  Missing tools are found before any scanning starts. A run where only some endpoints are reachable still
+  exits `0` and the report says how many were reached. STABILITY.md describes the exit codes.
+
 ## [1.4.1] - 2026-11-18
 
 Ruleset 1.0.4 (unchanged). A packaging-only patch: no change to scanning, verdicts or output formats.
@@ -194,7 +278,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.2.0...v1.3.0

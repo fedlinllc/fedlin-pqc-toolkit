@@ -77,16 +77,21 @@ Outputs:
 | `out/cbom.summary.json` | Machine-readable summary |
 | `out/cbom.json.runtime.json` | The capture before merging (an intermediate; `--redact` removes intermediates) |
 
-Check that a policy result can be trusted for a CBOM (the CBOM digest matches, the result names this toolkit's ruleset, and re-evaluating reproduces every verdict): `python3 scripts/policy.py verify --cbom out/cbom.json --policy out/cbom.policy.json`. The report and the MCP server use a policy result only when it passes; otherwise they evaluate the CBOM again.
+The run exits `0` when it assessed something, even if only some endpoints were reachable (the report says how
+many). It exits `2`, writing nothing, on invalid arguments or when a requested source produced nothing: no
+endpoint completed a handshake, a hosts file is missing, or a tool a source needs is missing (run `./setup.sh`).
+The exit code says whether the scan ran, not what it found; see [STABILITY.md](STABILITY.md).
+
+Check that a policy result can be trusted for a CBOM (the CBOM digest matches, the result names this toolkit's ruleset, and re-evaluating the CBOM reproduces the whole result, field for field; only the evaluation date may differ): `python3 scripts/policy.py verify --cbom out/cbom.json --policy out/cbom.policy.json`. The report and the MCP server use a policy result only when it passes; otherwise they evaluate the CBOM again.
 
 Or use the published container image, with nothing to install (pin it by the digest in the release notes):
 
 ```bash
 mkdir -p out
 podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 \
   --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
-# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 ...
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 ...
 ```
 
 ## Verify a release
@@ -96,8 +101,8 @@ and every file and the image carry Sigstore-signed SLSA build provenance that na
 (releases before 1.0.0 are tags only):
 
 ```bash
-gh attestation verify fedlin-pqc-toolkit-1.4.1.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
-gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify fedlin-pqc-toolkit-1.5.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 --repo fedlinllc/fedlin-pqc-toolkit
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
@@ -269,12 +274,19 @@ Compliant quantum-resistant public-key usages divided by (compliant + quantum-vu
 usages). A usage is one reference from an asset: a certificate's key or signature, a TLS session's key
 exchange, an offered SSH algorithm. Symmetric, hash and protocol-version usages are reported but do not
 move the score. It is this toolkit's measure, not a PKI Consortium PQCMM level and not a compliance
-determination.
+determination. The report gives the number without a letter grade (from 1.5.0), opens with the scan's
+scope and that disclaimer, and states what was observed, such as how many TLS endpoints negotiated
+post-quantum key exchange. `summary.json` carries the same as `scope`, `disclaimer`, `incomplete`,
+`tls_endpoints` and `tls_endpoints_pq_kex`.
 
 ## Other modes
 
-- **Cluster:** run with a kubeconfig and without `--no-runtime` to capture routes or ingresses, TLS
-  secret counts and SSH posture. `--deep` adds FIPS checks through a short-lived debug pod.
+- **Cluster:** add `--cluster` to capture the routes or ingresses and TLS secret counts of the cluster in
+  your current kube context; the run names the context it uses. `--deep` adds FIPS checks through a
+  short-lived debug pod. A run with `--endpoints`, `--repo`, `--theia-dir` or `--merge-cbom` never scans a
+  cluster without `--cluster` (from 1.5.0). A run with none of those flags scans the current context, as
+  before.
+- **Local SSH:** `--local-ssh` records this host's own SSH configuration (`sudo -n sshd -T`).
 - **Source:** `--repo <dir>` (dependency SBOM via cdxgen) and `--theia-dir <dir>` (certificates and key
   material via cbomkit-theia).
 - **Windows / AD CS:** run `scripts/collect-windows.ps1` and `scripts/collect-hardware-windows.ps1` on
@@ -296,11 +308,21 @@ agent read-only tools over toolkit outputs in one folder you choose:
 | `vendor_readiness` | Vendor answers checked against the vendor's CBOM |
 | `lookup_verdict` | The ruleset's verdict for one algorithm name under a profile |
 
+Register it with absolute paths (a client starts the server from its own working directory):
+
 ```bash
-python3 scripts/mcp_server.py --root ./out            # register this command in your MCP client
+# Claude Code
+claude mcp add fedlin-pqc -- python3 -I /path/to/fedlin-pqc-toolkit/scripts/mcp_server.py --root /path/to/out
 # or from the image, with no network and the folder read-only:
-podman run -i --rm --network none -v "$PWD/out:/data:ro,Z" --entrypoint python3 \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.4.1 scripts/mcp_server.py --root /data
+claude mcp add fedlin-pqc -- podman run -i --rm --network none -v /path/to/out:/data:ro,Z \
+  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 scripts/mcp_server.py --root /data
+```
+
+Other clients (for example Claude Desktop's `claude_desktop_config.json`) take the same command as JSON:
+
+```json
+{"mcpServers": {"fedlin-pqc": {"command": "python3",
+  "args": ["-I", "/path/to/fedlin-pqc-toolkit/scripts/mcp_server.py", "--root", "/path/to/out"]}}}
 ```
 
 The boundary is deliberate. **It never scans and makes no network connections**: you run scans yourself
@@ -316,11 +338,13 @@ signature and cipher-suite names TLS and certificate scanners report (every TLS 
 knows, plus legacy ones), with verdicts under both profiles, migration targets and sources, generated by the
 same code that writes policy results. Where a verdict depends on key size, the table gives exact size bands
 (for example RSA below 2048 bits is broken); look up a certificate key by its key type and size, not its
-curve name. It is deterministic for a ruleset version, so its SHA-256
-identifies it. Each release publishes it as `verdicts.json`, so the current table is always at
+curve name. Names are matched after lowercasing and removing everything except letters and digits, so
+`X25519MLKEM768`, `x25519-mlkem768` and ` X25519MLKEM768 ` are one key, and common aliases (`secp256r1`,
+`prime256v1`, `P-256`; `kyber768`) are listed as their own entries. It is deterministic for a ruleset version,
+so its SHA-256 identifies it. Each release publishes it as `verdicts.json`, so the current table is always at
 `https://github.com/fedlinllc/fedlin-pqc-toolkit/releases/latest/download/verdicts.json`. The format is fixed by
-[schemas/verdict-table-1.0.schema.json](schemas/verdict-table-1.0.schema.json). A name that is not in the
-table is unknown, never guessed. `python3 scripts/verdict_table.py lookup X25519MLKEM768 --profile nss`
+[schemas/verdict-table-1.0.schema.json](schemas/verdict-table-1.0.schema.json). A name whose key is not in the
+table is unknown, never guessed (`RSA2048` is unknown; look up `rsaEncryption` with 2048 bits). `python3 scripts/verdict_table.py lookup X25519MLKEM768 --profile nss`
 shows one entry.
 
 ## Access by mode
@@ -328,9 +352,9 @@ shows one entry.
 | Mode | What it reads | Privilege |
 |---|---|---|
 | Endpoints (`--endpoints`) | The TLS handshake and the server's public certificate | None |
-| Cluster | Route/ingress objects; TLS and SealedSecret objects are counted, values are not printed | Cluster-wide `list` on secrets (an ISSO should treat this as read access to secrets) |
+| Cluster (`--cluster`) | Route/ingress objects; TLS and SealedSecret objects are counted, values are not printed | Cluster-wide `list` on secrets (an ISSO should treat this as read access to secrets) |
 | `--deep` | FIPS settings on nodes via a short-lived debug pod | Node debug (privileged pod) |
-| Local SSH | `sshd -T` effective configuration | `sudo`; sshd loads the host keys in its own process |
+| Local SSH (`--local-ssh`) | `sshd -T` effective configuration | `sudo`; sshd loads the host keys in its own process |
 | Source (`--repo`, `--theia-dir`) | Files in the directories you name, which can include key files | Read access to those files |
 | Windows / AD CS | Certificate stores and CA templates | An account that can read the stores and query the CA |
 
@@ -342,8 +366,8 @@ recorded from a count of SealedSecret objects); they carry `fedlin:evidence` = `
 OpenSSL in FIPS mode will not offer X25519MLKEM768, so a FIPS host cannot observe the most common
 post-quantum key exchange. `setup.sh` builds a small probe image (Alpine pinned by digest, OpenSSL
 3.5.9) that the pipeline uses automatically on such hosts, and the toolkit container image bundles the
-same OpenSSL. Without either, anything the scan could not observe is recorded as `unknown`, never guessed, and the report is marked **Incomplete** with no letter
-grade.
+same OpenSSL. Without either, anything the scan could not observe is recorded as `unknown`, never guessed, and the report and `summary.json` mark the score
+incomplete.
 
 The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. Each endpoint
 whose certificate was captured is then contacted a second time by a client offering only classical
@@ -386,7 +410,8 @@ cannot see the server's implementation. The snapshot is refreshed deliberately a
 ## Vendor readiness
 
 `scripts/vendor_readiness.py` turns the 31 questions in *Post-quantum questions to ask your vendors*
-(ASD's ACSC with CISA and NSA, November 2026, reproduced under CC BY 4.0) into a questionnaire, an answer
+(ASD's ACSC with CISA and NSA, November 2026; (c) Commonwealth of Australia 2026, reproduced under CC BY 4.0
+with the attribution and changes stated in each output and in [NOTICE](NOTICE)) into a questionnaire, an answer
 template, and an assessment that checks a vendor's answers against the vendor's own CBOM:
 
 ```bash
@@ -399,7 +424,11 @@ Each question is typed. **Disclosure** answers (inventory, third-party cryptogra
 authentication on traditional asymmetric cryptography, hybrid use, PQC algorithms, library validation) are
 compared with the CBOM, and a contradiction is reported as such. **Capability** answers are recorded with
 their evidence and hold only for the version assessed. **Intent** answers (dates, roadmaps, licensing) are
-recorded and flagged when a date is missing or after 2030; they are never verified. The publication's seven
+recorded and flagged when a date is missing or after 2030; they are never verified. True/false claims may
+be JSON booleans or "yes"/"no" text, and an algorithm list may be a JSON list or a comma-separated string. An
+unanswered question is "unanswered" and a prose-only answer "not-checked", never "consistent". A claim that
+something is absent is "consistent" only if the vendor's CBOM declares complete coverage
+(`pkic:profile:coverage`); otherwise it is "not-evidenced". The publication's seven
 "common concerns in vendor responses" are raised from structured fields only, not from free-text answers.
 
 ## PQC Maturity Model evidence
@@ -518,6 +547,8 @@ https://fedlin.com.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE). Redistributions keep the [NOTICE](NOTICE) file (Apache-2.0 section 4(d)).
+The licence does not cover the FEDLIN name: [TRADEMARKS.md](TRADEMARKS.md) says how you may refer to the
+toolkit in your own work, and that you may not suggest FEDLIN performed, reviewed or endorsed it.
 
 Maintained by FEDLIN LLC ([fedlinllc](https://github.com/fedlinllc) on GitHub).

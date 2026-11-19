@@ -33,6 +33,18 @@ class ContainerLabels(unittest.TestCase):
         # Source tree keeps it in public/; the exported public tree has it at the root.
         self.assertTrue(any(os.path.isfile(os.path.join(ROOT, p)) for p in ("LICENSE", "public/LICENSE")))
 
+    def test_notice_shipped(self):
+        # Apache-2.0 4(d): redistributions keep the NOTICE; the image carries it next to the licence
+        self.assertIn("/licenses/fedlin-pqc-toolkit.NOTICE", self.final)
+        self.assertTrue(any(os.path.isfile(os.path.join(ROOT, p)) for p in ("NOTICE", "public/NOTICE")))
+
+    def test_trademark_policy_present(self):
+        path = next((os.path.join(ROOT, p) for p in ("TRADEMARKS.md", "public/TRADEMARKS.md")
+                     if os.path.isfile(os.path.join(ROOT, p))), None)
+        self.assertIsNotNone(path)
+        with open(path) as f:
+            self.assertIn("performed, reviewed, approved, certified or endorsed", f.read())
+
     def test_bundled_musl_licence_vendored(self):
         # The kex probe ships musl's loader; MIT requires its notice alongside.
         self.assertIn("ld-musl", self.final)

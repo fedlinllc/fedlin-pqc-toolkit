@@ -27,6 +27,55 @@ class ExitCodes(unittest.TestCase):
             self.assertIn("[error]", err)
             self.assertFalse(wrote, args)
 
+    def test_nothing_reachable_is_2(self):
+        # 1.5.0: a run whose only source produced nothing exits 2 and writes no CBOM (it used to exit 0)
+        rc, err, wrote = run("--no-runtime", "--endpoints", "127.0.0.1:1", "--no-enumerate", "--no-classical-probe")
+        self.assertEqual(rc, 2, err[-300:])
+        self.assertIn("none of the 1 endpoint(s)", err)
+        self.assertFalse(wrote)
+
+    def test_missing_hosts_file_is_2(self):
+        for v in ("hosts.txt", "./hosts", "lists/hosts", "example.com,missing.csv"):
+            rc, err, wrote = run("--no-runtime", "--endpoints", v)
+            self.assertEqual(rc, 2, (v, err[-300:]))
+            self.assertIn("no such file", err)
+            self.assertFalse(wrote, v)
+
+    def test_missing_tool_is_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            cbom = os.path.join(d, "in.json")
+            with open(cbom, "w") as f:
+                f.write('{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}')
+            for args in (["--repo", d, "--cdxgen", "/nonexistent/cdxgen"],
+                         ["--theia-dir", d, "--theia", "/nonexistent/theia"],
+                         ["--merge-cbom", cbom, "--cyclonedx", "/nonexistent/cyclonedx"]):
+                rc, err, wrote = run("--no-runtime", *args)
+                self.assertEqual(rc, 2, (args, err[-300:]))
+                self.assertIn("run ./setup.sh", err)
+                self.assertFalse(wrote, args)
+
+    def test_failed_merge_is_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            tool = os.path.join(d, "cyclonedx")
+            with open(tool, "w") as f:
+                f.write("#!/bin/sh\nexit 1\n")
+            os.chmod(tool, 0o755)
+            cbom = os.path.join(d, "in.json")
+            with open(cbom, "w") as f:
+                f.write('{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}')
+            rc, err, wrote = run("--no-runtime", "--merge-cbom", cbom, "--cyclonedx", tool)
+            self.assertEqual(rc, 2, err[-300:])
+            self.assertIn("could not be merged", err)
+            self.assertFalse(wrote)
+
+    def test_endpoint_file_detection(self):
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import tier2_pipeline as t
+        self.assertEqual(t.missing_endpoint_files(
+            ["host.txt", "example.com", "https://example.com/robots.txt", "example.com/a.txt", "lists/hosts",
+             "./h", "a.com, b.csv", "10.0.0.1:443", "[::1]:443"]),
+            ["host.txt", "lists/hosts", "./h", "b.csv"])
+
     def test_bad_flag_is_2(self):
         self.assertEqual(run("--no-such-flag")[0], 2)
 

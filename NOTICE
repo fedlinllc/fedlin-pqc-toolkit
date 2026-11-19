@@ -1,0 +1,17 @@
+fedlin-pqc-toolkit
+Copyright 2026 FEDLIN LLC
+
+This product includes software developed by FEDLIN LLC (https://fedlin.com).
+
+"FEDLIN" is a trademark of FEDLIN LLC. The Apache License 2.0 does not grant permission to use it
+(section 6). TRADEMARKS.md says how the name may be used.
+
+Third-party material vendored in this repository keeps its own licence: see third_party/*/LICENSE.
+
+data/vendor-questions/ reproduces the questions, "why it matters" and "key response considerations" of
+"Post-quantum questions to ask your vendors: Evaluating third-party readiness for post-quantum cryptography"
+by the Australian Signals Directorate's Australian Cyber Security Centre (ASD's ACSC), in partnership with
+CISA and NSA (November 2026). (c) Commonwealth of Australia 2026, licensed under CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/). Source: https://www.cyber.gov.au/publication/post-quantum-questions-to-ask-your-vendors
+Changes: PDF line-break hyphenation removed; question ids, claim types, structured claims and checks added.
+ASD, CISA and NSA have not reviewed or endorsed this toolkit.
