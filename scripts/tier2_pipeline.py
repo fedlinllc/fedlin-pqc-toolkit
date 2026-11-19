@@ -52,7 +52,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.5.2"
+TOOLKIT_VERSION = "1.6.0-rc.1"
 
 
 def run(cmd, timeout=25):
@@ -2027,7 +2027,8 @@ def main():
             parts.append("classical-only handshake, for endpoints that refused every ML-KEM group in enumeration")
         if "host-fips-subset" in vias:
             parts.append("FIPS host, reduced offer (no X25519MLKEM768); classical results not recorded; "
-                         "build images/kex-probe or set FEDLIN_KEX_PROBE_IMAGE")
+                         "from source run ./setup.sh (or set FEDLIN_KEX_PROBE_IMAGE); in a container use "
+                         "ghcr.io/fedlinllc/fedlin-pqc-toolkit-probe")
         ctx["kex_probe"] = "; ".join(parts) or "not run"
     if ssh:
         b.add_ssh(ssh)

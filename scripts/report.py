@@ -640,7 +640,8 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
                  "endpoint(s).** The score is partial. Either the key exchange could not be "
                  "read (a group the scan does not know, or one the enumeration contradicted: listed below if so), "
                  "or the scan host could not offer it: a FIPS-mode OpenSSL cannot offer post-quantum key "
-                 "exchange, so run `./setup.sh` to build the probe image, then scan again.")
+                 "exchange. From source, run `./setup.sh` to build the probe image; in a container, use "
+                 "`ghcr.io/fedlinllc/fedlin-pqc-toolkit-probe` instead of the certified image. Then scan again.")
         L.append("")
     conflicts = [(c.get("name", "TLS session"), p.get("value")) for c in bom.get("components", [])
                  for p in c.get("properties", []) or [] if p.get("name") == "fedlin:kexConflict"]
@@ -1090,7 +1091,8 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
                  "algorithms: an organization running ML-KEM hybrid key exchange in production receives credit "
                  "for that posture even when the certificate itself still uses classical algorithms. "
                  "Note: OpenSSL in FIPS mode will not offer X25519MLKEM768; on such hosts the toolkit uses "
-                 "its probe image (images/kex-probe, or FEDLIN_KEX_PROBE_IMAGE). Without one it tries a "
+                 "its probe image (images/kex-probe or FEDLIN_KEX_PROBE_IMAGE from source; the "
+                 "fedlin-pqc-toolkit-probe container image). Without one it tries a "
                  "reduced FIPS offer and records anything it could not observe as unknown.")
     L.append("- **Deterministic classification:** a versioned ruleset normalizes each algorithm "
              f"identifier and assigns its verdict under the {profile_label}, citing a primary source for each "

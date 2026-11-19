@@ -11,6 +11,21 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.6.0-rc.1] - 2026-11-19
+
+Ruleset 1.0.5 (unchanged). Release candidate: checks that both images build and that the certified one passes
+Red Hat preflight.
+
+### Changed
+- **Two container images (ADR-066).** `ghcr.io/fedlinllc/fedlin-pqc-toolkit` no longer bundles the Alpine OpenSSL
+  key-exchange probe: it carries only the UBI 9 OpenSSL, whose 3.5 release offers the hybrid ML-KEM groups on a
+  host that is not in FIPS mode, and it is the image built for Red Hat certification. The new
+  `ghcr.io/fedlinllc/fedlin-pqc-toolkit-probe` is the same image plus the probe (and musl's licence), for scans
+  from a FIPS-mode host, where only the probe can offer X25519MLKEM768. Both are built from one Containerfile
+  (`--target probe` for the second), attested with SLSA provenance, and named in the release notes. If you ran
+  the image on a FIPS-mode host, switch to `fedlin-pqc-toolkit-probe`; otherwise nothing changes. The
+  Incomplete banner and the CBOM's probe note say which to use.
+
 ## [1.5.2] - 2026-11-19
 
 Ruleset 1.0.5 (unchanged). Vendor readiness fixes from a second buyer-side and vendor-side test, of 1.5.1.
@@ -333,7 +348,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0-rc.1...HEAD
+[1.6.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0-rc.1
 [1.5.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.1...v1.5.0

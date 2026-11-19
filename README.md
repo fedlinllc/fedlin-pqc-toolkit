@@ -84,7 +84,8 @@ The exit code says whether the scan ran, not what it found; see [STABILITY.md](S
 
 Check that a policy result can be trusted for a CBOM (the CBOM digest matches, the result names this toolkit's ruleset, and re-evaluating the CBOM reproduces the whole result, field for field; only the evaluation date may differ): `python3 scripts/policy.py verify --cbom out/cbom.json --policy out/cbom.policy.json`. The report and the MCP server use a policy result only when it passes; otherwise they evaluate the CBOM again.
 
-Or use the published container image, with nothing to install (pin it by the digest in the release notes):
+Or use the published container image, with nothing to install (pin it by the digest in the release notes; on a
+FIPS-mode host use `fedlin-pqc-toolkit-probe`, see [FIPS-mode scan hosts](#fips-mode-scan-hosts)):
 
 ```bash
 mkdir -p out
@@ -365,8 +366,13 @@ recorded from a count of SealedSecret objects); they carry `fedlin:evidence` = `
 
 OpenSSL in FIPS mode will not offer X25519MLKEM768, so a FIPS host cannot observe the most common
 post-quantum key exchange. `setup.sh` builds a small probe image (Alpine pinned by digest, OpenSSL
-3.5.9) that the pipeline uses automatically on such hosts, and the toolkit container image bundles the
-same OpenSSL. Without either, anything the scan could not observe is recorded as `unknown`, never guessed, and the report and `summary.json` mark the score
+3.5.9) that the pipeline uses automatically on such hosts.
+
+There are two container images. `ghcr.io/fedlinllc/fedlin-pqc-toolkit` carries only the UBI 9 OpenSSL, whose
+3.5 release offers the hybrid ML-KEM groups on a host that is not in FIPS mode; it is the image built for Red Hat
+certification. `ghcr.io/fedlinllc/fedlin-pqc-toolkit-probe` is the same image plus the Alpine OpenSSL 3.5,
+used only to observe the negotiated group; use it on a FIPS-mode host. Without a probe, anything the scan could
+not observe is recorded as `unknown`, never guessed, and the report and `summary.json` mark the score
 incomplete.
 
 The score credits an endpoint that negotiates a post-quantum hybrid when one is offered. Each endpoint

@@ -1,6 +1,6 @@
 # Vendored: musl libc licence text
 
-The image ships musl's dynamic loader (`ld-musl-x86_64.so.1`, from Alpine 3.22 package musl 1.2.5-r13) with
+The probe image (`fedlin-pqc-toolkit-probe`) ships musl's dynamic loader (`ld-musl-x86_64.so.1`, from Alpine 3.22 package musl 1.2.5-r13) with
 the key-exchange probe OpenSSL in `/opt/kex-probe`. musl's MIT licence requires its notice to accompany the
 binary, so the build copies this file into `/licenses`.
 
