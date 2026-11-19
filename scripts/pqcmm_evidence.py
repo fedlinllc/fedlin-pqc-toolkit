@@ -73,6 +73,19 @@ class Facts:
         self.snap = snap
         self.cmvp = cmvp.match(bom, snap)
         self.pqc = [a for a in self.algos if a["vulnerable"] is False and a["family"] in PQC_FAMILIES]
+        self.match_notes = []
+        if self.answers:
+            # Do the answers describe the product this CBOM describes?
+            want = " ".join(str(self.answers.get(k) or "") for k in ("product", "version")).strip().lower()
+            have = " ".join(str(self.subject.get(k) or "") for k in ("name", "version")).strip().lower()
+            prod = str(self.answers.get("product") or "").strip().lower()
+            if prod and self.subject.get("name") and prod not in have and str(self.subject.get("name")).lower() not in want:
+                self.match_notes.append(f"The answers are for product {self.answers.get('product')!r} but the CBOM "
+                                        f"describes {self.subject.get('name')!r}: check they are the same product.")
+            ver = str(self.answers.get("version") or "").strip()
+            if ver and self.subject.get("version") and ver != str(self.subject.get("version")):
+                self.match_notes.append(f"The answers are for version {ver} but the CBOM describes version "
+                                        f"{self.subject.get('version')}.")
         self.vulnerable = [a for a in self.algos if a["vulnerable"] is True]
 
     def interfaces(self):
@@ -251,11 +264,23 @@ def evidence(F):
             "analysisTool": f"{F.tool}; ruleset {cnsa.RULESET_VERSION}, profile {F.profile}"}
     A = (F.answers or {}).get("answers", {})
     if A:
-        gaps = []
-        if (A.get("A1", {}).get("claims") or {}).get("traditional_asymmetric") is False and vul_rows:
-            gaps.append("Vendor answered A1 'no traditional asymmetric cryptography'; the CBOM shows: "
-                        + "; ".join(vul_rows[:5]))
-        f331["toolVsDisclosureGaps"] = "\n".join(gaps) or "No gap between the vendor's answers and the CBOM."
+        # The vendor-readiness disclosure checks, run against this CBOM (1.5.2: before, only A1 was compared and
+        # its gap cited certificate algorithms, so four contradictions could read "No gap").
+        facts = vr.cbom_facts(F.bom, F.profile)
+        ctx = {"profile": F.profile, "pkic": None, "cmvp": F.cmvp}
+        doc = vr.load_questions()
+        res = {q["id"]: vr.run_check(q, A.get(q["id"]) or {}, facts, ctx) for q in doc["questions"]
+               if q.get("check") and q["check"] != "dated"}
+        res = {k: v for k, v in res.items() if v}
+        gaps = [f"{k} contradicted: {v['detail']}" for k, v in sorted(res.items()) if v["status"] == "contradicted"]
+        gaps += [f"{k} not evidenced: {v['detail']}" for k, v in sorted(res.items()) if v["status"] == "not-evidenced"]
+        gaps += F.match_notes
+        counts = {}
+        for v in res.values():
+            counts[v["status"]] = counts.get(v["status"], 0) + 1
+        f331["toolVsDisclosureGaps"] = "\n".join(gaps) or (
+            f"No answer contradicts the CBOM in the {len(res)} disclosure checks run ("
+            + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())) + ").")
     E["3.3.1"] = _ev(f331, "derived", "The feature list is what the scan observed; components it did not reach "
                                       "are not covered.")
     E["3.3.3"] = _ev({"inventoryFormat": f"CycloneDX {F.bom.get('specVersion', '?')}",
@@ -369,12 +394,18 @@ def criteria_status(model, E, F):
 def build(cbom_path, profile=None, answers_path=None, model=None):
     model = model or load_model()
     profile = profile or cnsa.DEFAULT_PROFILE
-    with open(cbom_path, encoding="utf-8") as f:
-        bom = json.load(f)
+    try:
+        with open(cbom_path, encoding="utf-8") as f:
+            bom = json.load(f)
+    except OSError as e:
+        raise vr.VendorInputError(f"--cbom {cbom_path}: {e.strerror}")
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
+        raise vr.VendorInputError(f"--cbom {cbom_path}: not valid JSON ({e})")
+    if not isinstance(bom, dict) or not isinstance(bom.get("components", []) or [], list):
+        raise vr.VendorInputError(f"--cbom {cbom_path}: not a CycloneDX document")
     answers = None
     if answers_path:
-        with open(answers_path, encoding="utf-8") as f:
-            answers = json.load(f)
+        answers, _ = vr.load_answers(answers_path)
     F = Facts(bom, cbom_path, profile, answers)
     E = evidence(F)
     return {"model": model, "facts": F, "evidence": E, "criteria": criteria_status(model, E, F), "profile": profile}
@@ -438,7 +469,11 @@ def main(argv=None):
     ap.add_argument("--profile", choices=list(cnsa.PROFILES), default=cnsa.DEFAULT_PROFILE)
     ap.add_argument("--out", default="", help="report path (default: <cbom base>.pqcmm.md); JSON written beside it")
     a = ap.parse_args(argv)
-    res = build(a.cbom, a.profile, a.answers or None)
+    try:
+        res = build(a.cbom, a.profile, a.answers or None)
+    except vr.VendorInputError as e:
+        sys.stderr.write(f"[error] {e}\n")
+        return 2
     out = a.out or a.cbom.rsplit(".", 1)[0] + ".pqcmm.md"
     with open(out, "w", encoding="utf-8") as f:
         f.write(report_md(res) + "\n")

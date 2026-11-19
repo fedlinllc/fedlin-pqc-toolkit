@@ -105,12 +105,13 @@ class Assess(unittest.TestCase):
         res = self.run_case({"answers": {"T1": {"answer": "x", "claims": {"pqc_ready_date": "2031-03"}},
                                          "C5": {"answer": "x", "claims": {"roadmap_date": "2029"}}}})
         self.assertEqual(res["results"]["T1"]["status"], "late")
-        self.assertEqual(res["results"]["C5"]["status"], "consistent")
+        self.assertEqual(res["results"]["C5"]["status"], "planned")
         self.assertEqual(res["results"]["C3"]["status"], "missing-date")
 
     def test_concerns_from_structured_fields(self):
         res = self.run_case({"answers": {"I6": {"answer": "add-on", "claims": {"pqc_in_base_license": False}},
-                                         "A5": {"answer": "RSA-4096", "evidence": ["guide"]}}})
+                                         "A5": {"answer": "RSA-4096", "evidence": ["guide"],
+                                                "claims": {"stronger_traditional_settings": True}}}})
         names = [c for c, _ in res["concerns"]]
         for want in ("limited visibility of cryptographic use", "treatment of PQC as an optional or premium function",
                      "over-reliance on compensating controls", "lack of governance or ownership"):
@@ -307,6 +308,128 @@ class Fixes20261119b(unittest.TestCase):
             rc, err = self._run_cli(d, '{"answers": {"Z9": {"answer": "x"}}}')
         self.assertEqual(rc, 0)
         self.assertIn("Z9", err)
+
+
+
+class Fixes152(unittest.TestCase):
+    """fedlin-website re-test of 1.5.1 (1.5.2)."""
+    run_case = Assess.run_case
+
+    def test_l1_reads_its_claim_with_a_cbom(self):
+        comps = [algo("a/1", "ML-KEM-768")]
+        res = self.run_case({"answers": {"L1": {"answer": "no", "claims": {"cbom": False}}}}, comps)
+        self.assertEqual(res["results"]["L1"]["status"], "contradicted")
+        res = self.run_case({"answers": {"L1": {"answer": "No."}}}, comps)
+        self.assertEqual(res["results"]["L1"]["status"], "not-checked")
+        res = self.run_case({"answers": {"L1": {"answer": "yes", "claims": {"cbom": True}}}}, comps)
+        self.assertEqual(res["results"]["L1"]["status"], "consistent")
+
+    def test_t3_claimed_hybrid_absent_from_cbom(self):
+        res = self.run_case({"answers": {"T3": {"answer": "yes", "claims": {"hybrid": True,
+                                                                            "pqc_only_date": "2029"}}}},
+                            [algo("a/1", "ECDH")])
+        self.assertEqual(res["results"]["T3"]["status"], "not-evidenced")
+
+    def test_dates_are_not_cbom_checks(self):
+        res = self.run_case({"answers": {"T1": {"answer": "x", "claims": {"pqc_ready_date": "2019"}},
+                                         "C3": {"answer": "x", "claims": {"deprecation_date": "2020-06"}},
+                                         "C5": {"answer": "x", "claims": {"roadmap_date": "2029"}}}})
+        self.assertEqual(res["results"]["T1"]["status"], "implausible")
+        self.assertEqual(res["results"]["C3"]["status"], "past")
+        self.assertEqual(res["results"]["C5"]["status"], "planned")
+        md = vr.report_md(res)
+        head = md.split("## Common concerns")[0]
+        cbom_part = head.split("Checks against the vendor's CBOM:")[1].split("Stated dates")[0]
+        self.assertNotIn("planned", cbom_part)
+        self.assertNotIn("consistent", cbom_part)
+
+    def test_past_pqc_only_date_with_hybrid_still_present(self):
+        res = self.run_case({"answers": {"T3": {"answer": "yes", "claims": {"hybrid": True,
+                                                                            "pqc_only_date": "2019-01"}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        self.assertEqual(res["results"]["T3"]["status"], "contradicted")
+
+    def test_ga_date_before_fips_is_implausible(self):
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["ML-KEM-768"],
+                                                                          "ga_date": "2020-01"}}}},
+                            [algo("a/1", "ML-KEM-768")])
+        self.assertEqual(res["results"]["I1"]["status"], "implausible")
+
+    def test_invalid_ga_date_is_not_consistent(self):
+        for bad in ("soon", "Q5 2027"):
+            res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["ML-KEM-768"],
+                                                                              "ga_date": bad}}}},
+                                [algo("a/1", "ML-KEM-768")])
+            self.assertEqual(res["results"]["I1"]["status"], "missing-date", bad)
+
+    def test_nested_components_parameter_sets_and_oids(self):
+        nested = {"type": "application", "name": "app", "components": [
+            algo("a/1", "ECDH", ["keygen"]),
+            {"type": "cryptographic-asset", "bom-ref": "a/2", "name": "ML-KEM",
+             "cryptoProperties": {"assetType": "algorithm",
+                                  "algorithmProperties": {"parameterSetIdentifier": "768"}}},
+            {"type": "cryptographic-asset", "bom-ref": "a/3", "name": "2.16.840.1.101.3.4.3.18",
+             "cryptoProperties": {"assetType": "algorithm", "algorithmProperties": {}}}]}
+        res = self.run_case({"answers": {
+            "A1": {"answer": "no", "claims": {"traditional_asymmetric": False}},
+            "I1": {"answer": "x", "claims": {"pqc_algorithms": ["ML-KEM-768", "ML-DSA-65"], "ga_date": "2026-06"}}}},
+            [nested])
+        self.assertEqual(res["results"]["A1"]["status"], "contradicted")      # nested ECDH seen
+        self.assertEqual(res["results"]["I1"]["status"], "consistent", res["results"]["I1"]["detail"])
+
+    def test_a1_yes_with_hybrid_is_consistent(self):
+        res = self.run_case({"answers": {"A1": {"answer": "yes", "claims": {"traditional_asymmetric": True}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        self.assertEqual(res["results"]["A1"]["status"], "consistent")
+
+    def test_a5_concern_only_from_its_claim(self):
+        res = self.run_case({"answers": {"A5": {"answer": "PQC features require the Enterprise Plus licence tier",
+                                                "evidence": ["x"]}}})
+        self.assertNotIn("over-reliance on compensating controls", [c for c, _ in res["concerns"]])
+
+    def test_t3_in_late_dates_concern(self):
+        res = self.run_case({"answers": {"T3": {"answer": "yes", "claims": {"hybrid": True,
+                                                                            "pqc_only_date": "2034"}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        late = dict(res["concerns"]).get("unclear or deferred transition timelines", "")
+        self.assertIn("T3", late)
+
+    def test_contradictions_lead_the_report_and_summary_separates_vendors(self):
+        res = self.run_case({"answers": {"A1": {"answer": "none", "claims": {"traditional_asymmetric": False}}}},
+                            [algo("a/1", "ECDH")])
+        self.assertIn("1 answer(s) contradict the vendor's own CBOM: A1", vr.report_md(res))
+        evasive = vr.summary(self.run_case({"answers": {"A1": {"answer": "We use industry-standard encryption."}}}))
+        honest = vr.summary(self.run_case({"answers": {"A1": {"answer": "yes", "evidence": ["design doc"],
+                                                              "claims": {"traditional_asymmetric": True}}}}))
+        self.assertNotEqual((evasive["claims_given"], evasive["evidence_cited"]),
+                            (honest["claims_given"], honest["evidence_cited"]))
+
+    def test_fail_on(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "cbom.json"), "w") as f:
+                json.dump({"components": [algo("a/1", "ECDH")]}, f)
+            p = os.path.join(d, "a.json")
+            with open(p, "w") as f:
+                json.dump({"cbom": "cbom.json",
+                           "answers": {"A1": {"answer": "no", "claims": {"traditional_asymmetric": False}}}}, f)
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(vr.main(["assess", "--answers", p, "--out", os.path.join(d, "r.md"),
+                                          "--fail-on", "contradicted"]), 1)
+                self.assertEqual(vr.main(["assess", "--answers", p, "--out", os.path.join(d, "r.md")]), 0)
+
+    def test_unknown_algorithm_wording(self):
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["HQC-128"],
+                                                                          "ga_date": "2027"}}}},
+                            [algo("a/1", "ML-KEM-768")])
+        self.assertIn("not in this toolkit's ruleset", res["results"]["I1"]["detail"])
+        self.assertNotIn("not a recognised quantum-resistant", res["results"]["I1"]["detail"])
+
+    def test_template_carries_question_text(self):
+        t = vr.template(vr.load_questions())
+        self.assertEqual(t["answers"]["I6"]["_question"], "Is PQC included in base licensing?")
+        self.assertIn("stronger_traditional_settings", t["answers"]["A5"]["claims"])
 
 
 if __name__ == "__main__":

@@ -97,5 +97,55 @@ class Evidence(unittest.TestCase):
         self.assertIn("A1", res["evidence"]["3.3.1"]["fields"]["toolVsDisclosureGaps"])
 
 
+
+class Answers152(unittest.TestCase):
+    """pqcmm_evidence --answers (fedlin-website re-test of 1.5.1)."""
+    def build(self, answers, cbom_kwargs=None):
+        d = tempfile.mkdtemp()
+        cbom = write_cbom(d, **(cbom_kwargs or {}))
+        p = os.path.join(d, "answers.json")
+        with open(p, "w") as f:
+            json.dump(answers, f)
+        return pe.build(cbom, answers_path=p)
+
+    def gaps(self, res):
+        return res["evidence"]["3.3.1"]["fields"]["toolVsDisclosureGaps"]
+
+    def test_contradictions_are_listed_not_no_gap(self):
+        res = self.build({"answers": {
+            "A6": {"answer": "no", "claims": {"traditional_asymmetric_auth": False}},
+            "T3": {"answer": "no", "claims": {"hybrid": False}},
+            "L1": {"answer": "no", "claims": {"cbom": False}}}})
+        g = self.gaps(res)
+        for q in ("A6 contradicted", "T3 contradicted", "L1 contradicted"):
+            self.assertIn(q, g)
+        self.assertNotIn("No answer contradicts", g)
+
+    def test_a1_gap_does_not_cite_certificates(self):
+        res = self.build({"answers": {"A1": {"answer": "no", "claims": {"traditional_asymmetric": False}}}})
+        self.assertNotIn("A1 contradicted", self.gaps(res))       # only ML-KEM hybrid key exchange; certs are A6
+        res = self.build({"answers": {"A1": {"answer": "no", "claims": {"traditional_asymmetric": False}}}},
+                         {"kex": "X25519"})
+        self.assertIn("A1 contradicted", self.gaps(res))
+        self.assertNotIn("certificate", self.gaps(res).split("A1 contradicted")[1].split("\n")[0])
+
+    def test_product_mismatch_noted(self):
+        res = self.build({"product": "Other Product", "version": "9", "answers": {"A1": {"answer": "x"}}})
+        self.assertIn("check they are the same product", self.gaps(res))
+
+    def test_bad_input_exits_2(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            bad = os.path.join(d, "bad.json")
+            with open(bad, "w") as f:
+                f.write("{oops")
+            cbom = write_cbom(d)
+            with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(pe.main(["--cbom", cbom, "--answers", bad, "--out", os.path.join(d, "o.md")]), 2)
+                self.assertEqual(pe.main(["--cbom", bad, "--out", os.path.join(d, "o.md")]), 2)
+            self.assertIn("[error]", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

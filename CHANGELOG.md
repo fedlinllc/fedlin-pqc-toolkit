@@ -11,6 +11,34 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-19
+
+Ruleset 1.0.5 (unchanged). Vendor readiness fixes from a second buyer-side and vendor-side test, of 1.5.1.
+
+### Fixed
+- **No false "consistent" left.** L1 reads its `cbom` claim when a CBOM is supplied ("no CBOM" with one supplied is
+  contradicted; a prose-only answer is not-checked). T3 claiming hybrid support with no hybrid in the CBOM is
+  not-evidenced, and a PQC-only date that has passed while the CBOM still shows a hybrid is contradicted.
+- **Stated dates are reported apart from the CBOM checks**, as `planned`, `past`, `implausible` (before FIPS
+  203/204/205 were published), `late` or `missing-date`, never as "consistent". An invalid `ga_date` ("soon",
+  "Q5 2027") or one before August 2024 no longer leaves I1 consistent. T3 counts toward the late-dates concern.
+- **CBOM reading.** Nested components are read; a name without a parameter set takes the record's
+  `parameterSetIdentifier` (ML-KEM + 768 is ML-KEM-768); the NIST OIDs of the ML-KEM, ML-DSA and SLH-DSA parameter
+  sets are recognised.
+- **A1 with a hybrid.** An honest A1 "yes" for a vendor on X25519MLKEM768 is consistent again: the hybrid's
+  classical half is traditional asymmetric cryptography (a regression in 1.5.1).
+- **A5 concern from a claim.** The compensating-controls concern is raised from A5's new
+  `stronger_traditional_settings` claim, not from the answer text.
+- **Report.** Contradictions are stated at the top; "ruleset profile" instead of "verdict profile"; coverage
+  wording; a claimed algorithm the ruleset does not know is "not in this toolkit's ruleset", not "not a recognised
+  quantum-resistant algorithm". The template carries each question's text and type. The summary adds
+  `claims_given` and `evidence_cited`.
+- **`--fail-on`.** `assess --fail-on contradicted,late` exits `1` when a question has one of the listed statuses.
+- **PQCMM evidence with `--answers`.** The tool-vs-disclosure field lists every disclosure check the CBOM
+  contradicts or does not evidence (it compared only A1 and could print "No gap" beside four contradictions, and
+  its A1 gap cited certificates); it notes a product or version mismatch between the answers and the CBOM; an
+  unreadable file gives `[error]` and exit `2`.
+
 ## [1.5.1] - 2026-11-19
 
 Ruleset 1.0.5 (unchanged). Vendor readiness fixes from a buyer-side and vendor-side test of
@@ -305,7 +333,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.0...v1.4.1

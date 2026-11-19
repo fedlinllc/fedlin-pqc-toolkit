@@ -89,9 +89,9 @@ Or use the published container image, with nothing to install (pin it by the dig
 ```bash
 mkdir -p out
 podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 \
   --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
-# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 ...
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 ...
 ```
 
 ## Verify a release
@@ -101,8 +101,8 @@ and every file and the image carry Sigstore-signed SLSA build provenance that na
 (releases before 1.0.0 are tags only):
 
 ```bash
-gh attestation verify fedlin-pqc-toolkit-1.5.1.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
-gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify fedlin-pqc-toolkit-1.5.2.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 --repo fedlinllc/fedlin-pqc-toolkit
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
@@ -315,7 +315,7 @@ Register it with absolute paths (a client starts the server from its own working
 claude mcp add fedlin-pqc -- python3 -I /path/to/fedlin-pqc-toolkit/scripts/mcp_server.py --root /path/to/out
 # or from the image, with no network and the folder read-only:
 claude mcp add fedlin-pqc -- podman run -i --rm --network none -v /path/to/out:/data:ro,Z \
-  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 scripts/mcp_server.py --root /data
+  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.2 scripts/mcp_server.py --root /data
 ```
 
 Other clients (for example Claude Desktop's `claude_desktop_config.json`) take the same command as JSON:
@@ -422,18 +422,34 @@ python3 scripts/vendor_readiness.py assess --answers answers.json             # 
 
 Each question is typed. **Disclosure** answers (inventory, third-party cryptography, data flows and
 authentication on traditional asymmetric cryptography, hybrid use, PQC algorithms, library validation) are
-compared with the CBOM, and a contradiction is reported as such. **Capability** answers are recorded with
-their evidence and hold only for the version assessed. **Intent** answers (dates, roadmaps, licensing) are
-recorded and flagged when a date is missing or after 2030; they are never verified. True/false claims may
-be JSON booleans or "yes"/"no" text, and an algorithm list may be a JSON list or a comma-separated string. An
-unanswered question is "unanswered" and a prose-only answer "not-checked", never "consistent". A claim that
-something is absent is "consistent" only if the vendor's CBOM declares complete coverage
-(`pkic:profile:coverage`); otherwise it is "not-evidenced". A1 (customer data flows) is checked against
-key-establishment and encryption algorithms and A6 against signature and certificate algorithms; L4 counts only
-libraries that provide cryptography. Dates may be YYYY-MM-DD, YYYY-MM, YYYY or a quarter (Q3 2027). The report
-opens with its scope, a statement that it is not a compliance determination, the tool and ruleset versions and
-the SHA-256 of each input. An answers file or CBOM that cannot be read stops `assess` with exit code `2`. The publication's seven
-"common concerns in vendor responses" are raised from structured fields only, not from free-text answers.
+compared with the CBOM. **Capability** answers are recorded with their evidence and hold only for the version
+assessed. **Intent** answers (dates, roadmaps, licensing) are plans: they are never verified.
+
+How a comparison with the CBOM reads:
+
+| Status | Meaning |
+|---|---|
+| `consistent` | The answer's true/false claim agrees with the CBOM. A claim that something is absent counts only if the CBOM declares complete coverage (`pkic:profile:coverage`) |
+| `contradicted` | The claim disagrees with the CBOM: a question to put to the vendor, not a finding of bad faith |
+| `not-evidenced` | The CBOM neither shows nor rules out what the answer says (for example, absence in a CBOM of partial or undeclared coverage) |
+| `not-checked` | Answered in prose only, with no true/false claim to compare |
+| `unanswered`, `no-cbom`, `info` | Not answered; no CBOM supplied; a fact from the CBOM with nothing to compare |
+
+Stated dates are reported apart from these, as `planned`, `past` (ask for evidence it happened), `implausible`
+(before FIPS 203/204/205 were published), `late` (after 2030) or `missing-date` (absent or not a date; dates may
+be YYYY-MM-DD, YYYY-MM, YYYY, an ISO date-time or a quarter such as Q3 2027).
+
+True/false claims may be JSON booleans or "yes"/"no" text, and an algorithm list may be a JSON list or a
+comma-separated string. A1 (customer data flows) is checked against key-establishment and encryption algorithms,
+counting a hybrid's classical half, and A6 against signature and certificate algorithms; L4 counts only libraries
+that provide cryptography. The CBOM is read including nested components, with a name's parameter set
+(`parameterSetIdentifier`) and the NIST OIDs of the ML-KEM, ML-DSA and SLH-DSA parameter sets.
+
+The report opens with its scope, a statement that it is not a compliance determination, any contradictions, the
+tool and ruleset versions and the SHA-256 of each input. The publication's seven "common concerns in vendor
+responses" are raised from structured claims only (A5's concern from its `stronger_traditional_settings` claim),
+never from free text. `assess` exits `2` when the answers file or its CBOM cannot be read, and `--fail-on
+contradicted,late` (any statuses) makes it exit `1` when a question has one of them; otherwise it exits `0`.
 
 ## PQC Maturity Model evidence
 
@@ -443,7 +459,10 @@ model's own response fields for the questions a CBOM can evidence (algorithms in
 interoperability from an observed handshake, inventory completeness, the classical-only client test for
 zero-legacy operation, features that are not quantum-resistant, a draft
 harvest-now-decrypt-later register, hybrid use, CMVP candidates, identifiers) and marks where each value came
-from: observed, derived, snapshot, or vendor-stated.
+from: observed, derived, snapshot, or vendor-stated. With `--answers`, the "gaps between tool and disclosure"
+field lists every vendor-readiness disclosure check that the CBOM contradicts or does not evidence, and notes
+when the answers name a different product or version than the CBOM; `[error]` and exit code `2` when either file
+cannot be read.
 
 It does not award a maturity level or mark any criterion met. The PQCMM assesses a product or service; a scan
 observes one deployment, so a capability shown holds only for that configuration, and every criterion is

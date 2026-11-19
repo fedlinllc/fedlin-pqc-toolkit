@@ -161,7 +161,9 @@
    "key_response_considerations": "Higher security strength options are available as supported, documented configurations rather than bespoke or one-off implementations.",
    "claim_type": "capability",
    "check": null,
-   "structured_claims": {}
+   "structured_claims": {
+    "stronger_traditional_settings": "true/false: stronger traditional (non-PQC) settings, such as larger RSA keys, are offered as the answer to quantum risk"
+   }
   },
   {
    "id": "A6",
