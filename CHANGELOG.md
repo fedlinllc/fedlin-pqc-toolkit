@@ -11,6 +11,33 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-19
+
+Ruleset 1.0.5 (unchanged). Vendor readiness fixes from a buyer-side and vendor-side test of
+`vendor_readiness.py`.
+
+### Fixed
+- **A1 no longer counts signatures.** A1 asks whether customer data flows rely on traditional asymmetric
+  cryptography; it was scored with every quantum-vulnerable algorithm, so ML-KEM traffic authenticated with
+  ECDSA read as contradicted. A1 now counts key-establishment and encryption algorithms; signature and
+  certificate algorithms stay with A6.
+- **L4 counts only cryptographic libraries.** Any library (for example `jackson-databind`) contradicted a "no
+  third-party cryptography" answer; now only libraries that provide cryptography do.
+- **No "opaque cryptography" label for unrecognised names.** An algorithm name the ruleset does not know (such
+  as HQC-128) raised the publication's "proprietary or opaque cryptography" concern against the vendor. Such
+  names are now listed for review instead, and that concern is not raised automatically.
+- **Pre-standard Kyber hybrids count as hybrid** for T3 (`X25519Kyber768Draft00` was invisible).
+- **Wording.** I1 says "meets the profile target", not "compliant". The report opens with its scope, what
+  "consistent" and "contradicted" do and do not mean, that it is not a compliance determination, and the tool
+  version, ruleset version, run date and SHA-256 of each input. Truncated answers are marked.
+- **Dates.** Quarters (Q3 2027), ISO date-times and month ends are read; an invalid value (2026-13) is reported
+  as not a date instead of "no date given"; a PQC-only date or GA date after 2030 is "late".
+- **A5.** A negative A5 answer ("No.") no longer raises the compensating-controls concern.
+- **Robustness.** An answers file or CBOM that is not valid JSON or has the wrong shape, or a `cbom` path that
+  does not exist, stops `assess` with an `[error]` and exit code `2` instead of a traceback or a silent
+  "no CBOM". Answers with unknown question ids are reported. The summary adds per-question `statuses`,
+  `inputs` (file digests), `toolkit_version`, `ruleset_version` and `assessed`.
+
 ## [1.5.0] - 2026-11-19
 
 Ruleset 1.0.5 (control mapping only; no verdict or score changes, see CORRECTIONS.md). Behaviour changes for
@@ -278,7 +305,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.3.0...v1.4.0

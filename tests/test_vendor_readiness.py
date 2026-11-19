@@ -73,9 +73,9 @@ class Assess(unittest.TestCase):
 
     def test_contradiction_on_traditional_asymmetric(self):
         res = self.run_case({"answers": {"A1": {"answer": "none", "claims": {"traditional_asymmetric": False}}}},
-                            [algo("a/1", "ECDSA", ["sign"]), algo("a/2", "AES-256")])
+                            [algo("a/1", "ECDH", ["keygen"]), algo("a/2", "AES-256")])
         self.assertEqual(res["results"]["A1"]["status"], "contradicted")
-        self.assertIn("ECDSA", res["results"]["A1"]["detail"])
+        self.assertIn("ECDH", res["results"]["A1"]["detail"])
 
     def test_auth_uses_certificate_algorithms(self):
         res = self.run_case({"answers": {"A6": {"answer": "none", "claims": {"traditional_asymmetric_auth": False}}}},
@@ -116,9 +116,11 @@ class Assess(unittest.TestCase):
                      "over-reliance on compensating controls", "lack of governance or ownership"):
             self.assertIn(want, names)
 
-    def test_opaque_algorithm_flagged(self):
-        res = self.run_case({"answers": {}}, [algo("a/1", "ACME-Secret-Cipher")])
-        self.assertIn("use of proprietary or opaque cryptography", [c for c, _ in res["concerns"]])
+    def test_unrecognised_algorithm_is_listed_not_labelled_opaque(self):
+        res = self.run_case({"answers": {}}, [algo("a/1", "HQC-128")])
+        self.assertNotIn("use of proprietary or opaque cryptography", [c for c, _ in res["concerns"]])
+        self.assertIn("does not recognise", vr.report_md(res))
+        self.assertIn("HQC-128", vr.report_md(res))
 
     def test_report_and_summary(self):
         res = self.run_case({"vendor": "V", "answers": {"A1": {"answer": "none",
@@ -153,7 +155,7 @@ class Fixes20261119(unittest.TestCase):
     def test_string_claims_are_checked(self):
         for no in ("false", "No", "no.", "none"):
             res = self.run_case({"answers": {"A1": {"answer": "none", "claims": {"traditional_asymmetric": no}}}},
-                                [algo("a/1", "ECDSA", ["sign"])])
+                                [algo("a/1", "rsaEncryption", ["encapsulate"])])
             self.assertEqual(res["results"]["A1"]["status"], "contradicted", no)
         res = self.run_case({"answers": {"T3": {"answer": "no", "claims": {"hybrid": "no"}}}},
                             [algo("a/1", "X25519MLKEM768")])
@@ -167,7 +169,8 @@ class Fixes20261119(unittest.TestCase):
                             [algo("a/1", "X25519MLKEM768")])
         d = res["results"]["I1"]["detail"]
         self.assertIn("ML-KEM-768:", d)
-        self.assertIn("ML-DSA-65: compliant; not in the CBOM", d)
+        self.assertIn("ML-DSA-65: meets the `civilian` profile target; not in the CBOM", d)
+        self.assertNotIn("compliant", d)
         self.assertEqual(res["results"]["I1"]["status"], "not-evidenced")
 
     def test_unknown_claimed_algorithm_is_not_consistent(self):
@@ -211,6 +214,99 @@ class Fixes20261119(unittest.TestCase):
                     "A1": {"answer": "none", "claims": {"traditional_asymmetric": False}}}}, f)
             res = vr.assess(p, "civilian")
         self.assertEqual(res["results"]["A1"]["status"], "consistent")
+
+
+
+class Fixes20261119b(unittest.TestCase):
+    """Vendor items 3-5 of the fedlin-website stranger test (1.5.1)."""
+    run_case = Assess.run_case
+
+    def test_a1_ignores_signature_algorithms(self):
+        # data in transit on ML-KEM, authenticated with ECDSA: A1 ("data flows rely on traditional asymmetric")
+        # is not contradicted by the signature; A6 is
+        comps = [algo("a/1", "X25519MLKEM768"), algo("a/2", "ECDSA", ["sign"])]
+        res = self.run_case({"answers": {
+            "A1": {"answer": "no", "claims": {"traditional_asymmetric": False}},
+            "A6": {"answer": "no", "claims": {"traditional_asymmetric_auth": False}}}}, comps)
+        self.assertNotEqual(res["results"]["A1"]["status"], "contradicted")
+        self.assertEqual(res["results"]["A6"]["status"], "contradicted")
+
+    def test_l4_ignores_non_crypto_libraries(self):
+        jackson = {"type": "library", "group": "com.fasterxml.jackson.core", "name": "jackson-databind"}
+        res = self.run_case({"answers": {"L4": {"answer": "no", "claims": {"third_party_crypto": False}}}},
+                            [jackson, algo("a/1", "ML-KEM-768")])
+        self.assertNotEqual(res["results"]["L4"]["status"], "contradicted")
+        bc = {"type": "library", "group": "org.bouncycastle", "name": "bcprov-jdk18on"}
+        res = self.run_case({"answers": {"L4": {"answer": "no", "claims": {"third_party_crypto": False}}}},
+                            [bc, algo("a/1", "ML-KEM-768")])
+        self.assertEqual(res["results"]["L4"]["status"], "contradicted")
+
+    def test_kyber_hybrid_counts_as_hybrid(self):
+        res = self.run_case({"answers": {"T3": {"answer": "no", "claims": {"hybrid": False}}}},
+                            [algo("a/1", "X25519Kyber768Draft00")])
+        self.assertEqual(res["results"]["T3"]["status"], "contradicted")
+
+    def test_dates(self):
+        self.assertEqual(vr._date("Q3 2027"), vr.datetime.date(2027, 9, 30))
+        self.assertEqual(vr._date("2027-Q4"), vr.datetime.date(2027, 12, 31))
+        self.assertEqual(vr._date("2027-02"), vr.datetime.date(2027, 2, 28))
+        self.assertEqual(vr._date("2027-03-01T10:00:00Z"), vr.datetime.date(2027, 3, 1))
+        self.assertIsNone(vr._date("2026-13"))
+        res = self.run_case({"answers": {"T1": {"answer": "x", "claims": {"pqc_ready_date": "2026-13"}}}})
+        self.assertIn("is not a date", res["results"]["T1"]["detail"])
+        res = self.run_case({"answers": {"T3": {"answer": "yes", "claims": {"hybrid": True,
+                                                                            "pqc_only_date": "2033"}}}},
+                            [algo("a/1", "X25519MLKEM768")])
+        self.assertEqual(res["results"]["T3"]["status"], "late")
+        res = self.run_case({"answers": {"I1": {"answer": "x", "claims": {"pqc_algorithms": ["ML-KEM-768"],
+                                                                          "ga_date": "2032-01"}}}},
+                            [algo("a/1", "ML-KEM-768")])
+        self.assertEqual(res["results"]["I1"]["status"], "late")
+
+    def test_a5_negative_answer_raises_no_concern(self):
+        res = self.run_case({"answers": {"A5": {"answer": "No.", "evidence": ["x"]}}})
+        self.assertNotIn("over-reliance on compensating controls", [c for c, _ in res["concerns"]])
+
+    def test_report_has_scope_disclaimer_and_provenance(self):
+        res = self.run_case({"answers": {}}, [algo("a/1", "ML-KEM-768")])
+        md = vr.report_md(res)
+        for want in ("**Scope:**", "**Not a determination.**", "not a compliance determination",
+                     "fedlin-pqc-toolkit", "SHA-256"):
+            self.assertIn(want, md)
+        self.assertNotIn("compliant", md.replace("compliance", ""))
+        sm = vr.summary(res)
+        self.assertIn("statuses", sm)
+        self.assertIn("cbom", sm["inputs"])
+
+    def _run_cli(self, d, answers_text, cbom_text=None):
+        if cbom_text is not None:
+            with open(os.path.join(d, "cbom.json"), "w") as f:
+                f.write(cbom_text)
+        p = os.path.join(d, "a.json")
+        with open(p, "w") as f:
+            f.write(answers_text)
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = vr.main(["assess", "--answers", p, "--out", os.path.join(d, "r.md")])
+        return rc, err.getvalue()
+
+    def test_bad_inputs_exit_2_without_traceback(self):
+        cases = [("{not json", None), ("[]", None), ('{"answers": []}', None),
+                 ('{"answers": {"A1": "yes"}}', None), ('{"answers": {"A1": {"answer": 5}}}', None), ('{"cbom": "missing.json", "answers": {}}', None),
+                 ('{"cbom": "cbom.json", "answers": {}}', "{oops"), ('{"cbom": 5, "answers": {}}', None)]
+        for answers_text, cbom_text in cases:
+            with tempfile.TemporaryDirectory() as d:
+                rc, err = self._run_cli(d, answers_text, cbom_text)
+            self.assertEqual(rc, 2, answers_text)
+            self.assertIn("[error]", err, answers_text)
+
+    def test_unknown_question_ids_are_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            rc, err = self._run_cli(d, '{"answers": {"Z9": {"answer": "x"}}}')
+        self.assertEqual(rc, 0)
+        self.assertIn("Z9", err)
 
 
 if __name__ == "__main__":

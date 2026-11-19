@@ -89,9 +89,9 @@ Or use the published container image, with nothing to install (pin it by the dig
 ```bash
 mkdir -p out
 podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 \
   --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
-# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 ...
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 ...
 ```
 
 ## Verify a release
@@ -101,8 +101,8 @@ and every file and the image carry Sigstore-signed SLSA build provenance that na
 (releases before 1.0.0 are tags only):
 
 ```bash
-gh attestation verify fedlin-pqc-toolkit-1.5.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
-gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify fedlin-pqc-toolkit-1.5.1.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 --repo fedlinllc/fedlin-pqc-toolkit
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
@@ -315,7 +315,7 @@ Register it with absolute paths (a client starts the server from its own working
 claude mcp add fedlin-pqc -- python3 -I /path/to/fedlin-pqc-toolkit/scripts/mcp_server.py --root /path/to/out
 # or from the image, with no network and the folder read-only:
 claude mcp add fedlin-pqc -- podman run -i --rm --network none -v /path/to/out:/data:ro,Z \
-  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.0 scripts/mcp_server.py --root /data
+  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.5.1 scripts/mcp_server.py --root /data
 ```
 
 Other clients (for example Claude Desktop's `claude_desktop_config.json`) take the same command as JSON:
@@ -428,7 +428,11 @@ recorded and flagged when a date is missing or after 2030; they are never verifi
 be JSON booleans or "yes"/"no" text, and an algorithm list may be a JSON list or a comma-separated string. An
 unanswered question is "unanswered" and a prose-only answer "not-checked", never "consistent". A claim that
 something is absent is "consistent" only if the vendor's CBOM declares complete coverage
-(`pkic:profile:coverage`); otherwise it is "not-evidenced". The publication's seven
+(`pkic:profile:coverage`); otherwise it is "not-evidenced". A1 (customer data flows) is checked against
+key-establishment and encryption algorithms and A6 against signature and certificate algorithms; L4 counts only
+libraries that provide cryptography. Dates may be YYYY-MM-DD, YYYY-MM, YYYY or a quarter (Q3 2027). The report
+opens with its scope, a statement that it is not a compliance determination, the tool and ruleset versions and
+the SHA-256 of each input. An answers file or CBOM that cannot be read stops `assess` with exit code `2`. The publication's seven
 "common concerns in vendor responses" are raised from structured fields only, not from free-text answers.
 
 ## PQC Maturity Model evidence

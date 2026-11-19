@@ -18,6 +18,7 @@ Usage:
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -33,7 +34,16 @@ import cnsa20_ruleset as cnsa  # noqa: E402
 QUESTIONS = os.path.join(ROOT, "data", "vendor-questions", "asd-cisa-nsa-2026-11.json")
 VALIDATOR = os.path.join(ROOT, "third_party", "pkic-cbom")
 DEADLINE = datetime.date(2030, 12, 31)
-_HYBRID = re.compile(r"mlkem.*(x25519|x448|secp|nistp)|(x25519|x448|secp|nistp).*mlkem", re.I)
+_HYBRID = re.compile(r"(mlkem|kyber).*(x25519|x448|secp|nistp|p256|p384|p521)|"
+                     r"(x25519|x448|secp|nistp|p256|p384|p521).*(mlkem|kyber)", re.I)
+# A library that provides cryptography, by name, when it is not in the toolkit's known-library table
+_CRYPTO_LIB = re.compile(r"crypt|ssl|tls|sodium|nacl|bouncycastle|bcprov|bcpkix|noble|jose|jwt|openssl|"
+                         r"boringssl|wolfssl|mbedtls|gcrypt|gnutls|libnss|\bnss\b|aws-lc|botan|liboqs|oqs", re.I)
+_NEGATIVE = re.compile(r"^\s*(no|none|n/?a|not applicable)\b", re.I)
+
+
+class VendorInputError(ValueError):
+    """The answers file or the CBOM it names cannot be used: stop with exit code 2."""
 
 
 def attribution(doc, md=True):
@@ -90,20 +100,43 @@ def template(doc):
 
 
 # --- CBOM facts -----------------------------------------------------------------------------
+_QUARTER = re.compile(r"^(?:q([1-4])\s*[-/ ]?\s*(\d{4})|(\d{4})\s*[-/ ]?\s*q([1-4]))$", re.I)
+
+
 def _date(s):
-    if not s:
+    """A planned date: YYYY-MM-DD, YYYY-MM, YYYY, an ISO date-time, or a quarter (Q3 2027, 2027-Q3). The latest
+    day the value allows, so a plan is never read as earlier than stated. None if absent or not a date."""
+    if s in (None, ""):
         return None
+    t = str(s).strip()
+    m = _QUARTER.match(t)
+    if m:
+        q, y = (int(m.group(1)), int(m.group(2))) if m.group(1) else (int(m.group(4)), int(m.group(3)))
+        return datetime.date(y, 3 * q, 30 if q in (2, 3) else 31)
+    if re.match(r"^\d{4}-\d{2}-\d{2}[T ]", t):
+        t = t[:10]
     for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
         try:
-            d = datetime.datetime.strptime(str(s), fmt).date()
+            d = datetime.datetime.strptime(t, fmt).date()
             if fmt == "%Y-%m":
-                d = d.replace(day=28)
+                nxt = d.replace(year=d.year + 1, month=1) if d.month == 12 else d.replace(month=d.month + 1)
+                d = nxt - datetime.timedelta(days=1)
             elif fmt == "%Y":
                 d = d.replace(month=12, day=31)
             return d
         except ValueError:
             continue
     return None
+
+
+def _date_issue(a, key):
+    """(date, problem): problem says why a given value is not usable as a date."""
+    v = _claim(a, key)
+    d = _date(v)
+    if d is None and v not in (None, ""):
+        return None, (f"`{key}` = {str(v)[:40]!r} is not a date (use YYYY-MM-DD, YYYY-MM, YYYY or a quarter "
+                      "such as Q3 2027).")
+    return d, None
 
 
 def cbom_facts(bom, profile):
@@ -143,6 +176,16 @@ def cbom_facts(bom, profile):
     for c in certs:
         cp = (c.get("cryptoProperties", {}) or {}).get("certificateProperties", {}) or {}
         cert_refs |= {cp.get("signatureAlgorithmRef"), cp.get("subjectPublicKeyRef")}
+    try:
+        from tier2_pipeline import LIB_CRYPTO
+    except Exception:  # pragma: no cover
+        LIB_CRYPTO = {}
+    crypto_libs = []
+    for c in libs:
+        g, n = (c.get("group") or "").strip(), (c.get("name") or "").strip()
+        full = (f"{g}/{n}" if g else n).lower()
+        if full in LIB_CRYPTO or _CRYPTO_LIB.search(full) or c.get("cryptoProperties"):
+            crypto_libs.append(c)
     for a in algos:
         a["auth"] = (a["ref"] in cert_refs or a["lane"] == "signature"
                      or bool({"sign", "verify"} & set(a["functions"])) or a["primitive"] == "signature")
@@ -151,6 +194,7 @@ def cbom_facts(bom, profile):
                      if p.get("name") == "pkic:profile:coverage"), None)
     return {"coverage": coverage or "not declared",
             "algorithms": algos, "certificates": certs, "protocols": protocols, "libraries": libs,
+            "crypto_libraries": crypto_libs,
             "layers": sorted(layers | ({"protocol"} if protocols else set()) | ({"certificate"} if certs else set())),
             "by_ref": by_ref}
 
@@ -241,7 +285,9 @@ def run_check(q, a, facts, ctx):
         return None
     if chk == "dated":
         key = next(iter(q["structured_claims"]))
-        d = _date(_claim(a, key))
+        d, bad = _date_issue(a, key)
+        if bad:
+            return _r("missing-date", bad)
         if not d:
             return _r("missing-date", f"No date given in `{key}`.")
         if d > DEADLINE:
@@ -270,24 +316,29 @@ def run_check(q, a, facts, ctx):
         return _r("info", "Layers present in the CBOM: " + (", ".join(facts["layers"]) or "none") + ".")
     if chk == "third_party_crypto":
         found = ctx.get("cmvp", [])
-        libs = facts["libraries"]
+        libs = facts["crypto_libraries"]       # libraries that provide cryptography, not every dependency
         claimed = _bool_claim(a, "third_party_crypto")
         if claimed is None:
-            return _unclaimed(a, f"The CBOM lists {len(libs)} librar(ies).")
+            return _unclaimed(a, f"The CBOM lists {len(libs)} cryptographic librar(ies).")
         if claimed is False and (found or libs):
-            return _r("contradicted", f"Answer says no, but the CBOM lists {len(libs)} librar(ies)"
+            return _r("contradicted", f"Answer says no, but the CBOM lists {len(libs)} cryptographic librar(ies) "
+                                      f"({', '.join(sorted({c.get('name') or '?' for c in libs})[:6])})"
                                       + (f", including {', '.join(sorted({f['label'] for f in found}))}" if found else "")
                                       + ".")
         if not libs:
             if claimed is False:
-                return _absence(facts, "no library components")
-            return _r("not-evidenced", "The CBOM lists no library components, so inherited cryptography cannot "
+                return _absence(facts, "no cryptographic library")
+            return _r("not-evidenced", "The CBOM lists no cryptographic library, so inherited cryptography cannot "
                                        "be checked.")
-        return _r("consistent", f"The CBOM lists {len(libs)} librar(ies)"
+        return _r("consistent", f"The CBOM lists {len(libs)} cryptographic librar(ies)"
                                 + (f"; recognised crypto implementations: {', '.join(sorted({f['label'] for f in found}))}"
                                    if found else "") + ".")
     if chk in ("traditional_asymmetric", "auth_asymmetric"):
-        vul = [x for x in algos if x["vulnerable"] is True and (chk == "traditional_asymmetric" or x["auth"])]
+        # A1 asks about protecting customer data flows (key establishment, encryption); signatures and
+        # certificate keys are A6's subject, so A1 counts only non-authentication algorithms.
+        vul = [x for x in algos if x["vulnerable"] is True
+               and (x["auth"] if chk == "auth_asymmetric" else not x["auth"])
+               and (chk == "auth_asymmetric" or x["lane"] in ("key-establishment", "public-key"))]
         key = "traditional_asymmetric" if chk == "traditional_asymmetric" else "traditional_asymmetric_auth"
         claimed = _bool_claim(a, key)
         names = ", ".join(sorted({x["name"] for x in vul})[:8])
@@ -295,7 +346,8 @@ def run_check(q, a, facts, ctx):
             return _unclaimed(a, f"The CBOM shows {names or 'no quantum-vulnerable algorithm'}.")
         if claimed is False and vul:
             return _r("contradicted", f"Answer says none, but the CBOM shows quantum-vulnerable "
-                                      f"{'authentication ' if chk == 'auth_asymmetric' else ''}algorithms: {names}.")
+                                      f"{'authentication' if chk == 'auth_asymmetric' else 'key-establishment'} "
+                                      f"algorithms: {names}.")
         if claimed is True and not vul:
             return _r("not-evidenced", "Answer says yes, but the CBOM shows no quantum-vulnerable algorithm; "
                                        "the CBOM may be incomplete.")
@@ -303,9 +355,10 @@ def run_check(q, a, facts, ctx):
             return _r("consistent", f"CBOM shows: {names}.")
         return _absence(facts, "no quantum-vulnerable algorithm")
     if chk == "hybrid":
-        hyb = sorted({x["name"] for x in algos if x["canonical"] and _HYBRID.search(x["canonical"])})
+        hyb = sorted({x["name"] for x in algos if _HYBRID.search(x["name"] or "")
+                      or (x["canonical"] and _HYBRID.search(x["canonical"]))})
         claimed = _bool_claim(a, "hybrid")
-        plan = _date(_claim(a, "pqc_only_date"))
+        plan, bad = _date_issue(a, "pqc_only_date")
         if claimed is None and not hyb:
             return _unclaimed(a, "No hybrid key establishment in the CBOM.")
         if claimed is False and hyb:
@@ -313,7 +366,11 @@ def run_check(q, a, facts, ctx):
         if hyb or claimed:
             if not plan:
                 return _r("missing-date", (f"Hybrid in use ({', '.join(hyb)}) " if hyb else "Hybrid supported ")
-                          + "with no `pqc_only_date`; the publication expects a documented de-hybridisation plan.")
+                          + "with no usable `pqc_only_date`; the publication expects a documented de-hybridisation "
+                          "plan." + (" " + bad if bad else ""))
+            if plan > DEADLINE:
+                return _r("late", f"Hybrid treated as transitional, but PQC-only is planned for "
+                                  f"{_claim(a, 'pqc_only_date')}, after the end of 2030.")
             return _r("consistent", f"Hybrid treated as transitional; PQC-only planned {_claim(a, 'pqc_only_date')}.")
         return _r("info", "No hybrid key establishment in the CBOM.")
     if chk == "pqc_algorithms":
@@ -330,7 +387,8 @@ def run_check(q, a, facts, ctx):
                 missing.append(name)
                 rows.append(f"{name}: not a recognised quantum-resistant algorithm")
                 continue
-            ok = "compliant" if r.get("priority") == "None" else f"below the `{ctx['profile']}` target ({r.get('cnsa_target')})"
+            ok = (f"meets the `{ctx['profile']}` profile target" if r.get("priority") == "None"
+                  else f"below the `{ctx['profile']}` profile target ({r.get('cnsa_target')})")
             want = r["canonical"].replace("-", "")
             hits = sorted(x["name"] for k, x in in_cbom.items() if want == k.replace("-", "") or want in k.replace("-", ""))
             if not hits:
@@ -340,8 +398,10 @@ def run_check(q, a, facts, ctx):
                 direct = any(want == in_cbom[k]["canonical"].replace("-", "") for k in in_cbom
                              if in_cbom[k]["name"] in hits)
                 rows.append(f"{name}: {ok}; in the CBOM" + ("" if direct else f" (within {', '.join(hits)})"))
-        ga = _date(_claim(a, "ga_date"))
-        tail = "" if ga else " No `ga_date` given."
+        ga, bad = _date_issue(a, "ga_date")
+        tail = (" " + bad) if bad else ("" if ga else " No `ga_date` given.")
+        if ga and ga > DEADLINE:
+            tail = f" `ga_date` = {_claim(a, 'ga_date')}, after the end of 2030."
         if not claimed:
             if not _answered(a):
                 return _r("unanswered", "Not answered." + (" The CBOM shows " + ", ".join(sorted(in_cbom)) + "."
@@ -350,7 +410,7 @@ def run_check(q, a, facts, ctx):
                 return _r("not-evidenced", "No algorithms listed in the answer, but the CBOM shows "
                                            + ", ".join(sorted(in_cbom)) + "." + tail)
             return _r("missing-date" if not ga else "info", "No PQC algorithms listed." + tail)
-        status = "not-evidenced" if missing else "consistent"
+        status = "not-evidenced" if missing else ("late" if ga and ga > DEADLINE else "consistent")
         return _r(status, "; ".join(rows) + "." + tail)
     if chk == "library_validation":
         found = ctx.get("cmvp", [])
@@ -389,14 +449,13 @@ def concerns(doc, answers, results, facts):
     late = [i for i in ("T1", "I1", "C3", "C5") if results.get(i) and results[i]["status"] in ("missing-date", "late")]
     if late:
         out.append(("unclear or deferred transition timelines", "Missing or post-2030 dates: " + ", ".join(late) + "."))
-    if facts is not None:
-        opaque = sorted({x["name"] for x in facts["algorithms"] if not x["canonical"] or x["standard"] == "non-nist"})
-        if opaque:
-            out.append(("use of proprietary or opaque cryptography",
-                        "Unrecognised or non-standard algorithms in the CBOM: " + ", ".join(opaque[:10]) + "."))
+    # "Proprietary or opaque cryptography" is not raised automatically: a name the ruleset does not recognise is
+    # not evidence that the vendor uses proprietary cryptography (1.5.1). Such names are listed in the report for
+    # review instead.
     if _bool_claim(A.get("I6") or {}, "pqc_in_base_license") is False:
         out.append(("treatment of PQC as an optional or premium function", "I6: PQC is not in base licensing."))
-    if answered("A5") and not _list_claim(A.get("I1") or {}, "pqc_algorithms"):
+    if answered("A5") and not _NEGATIVE.match(str((A.get("A5") or {}).get("answer") or "")) \
+            and not _list_claim(A.get("I1") or {}, "pqc_algorithms"):
         out.append(("over-reliance on compensating controls",
                     "Stronger traditional settings are offered (A5) but no PQC algorithms are committed (I1). "
                     "Larger classical keys do not address the risk from a CRQC."))
@@ -409,15 +468,45 @@ def concerns(doc, answers, results, facts):
 def assess(answers_path, profile=None, doc=None):
     doc = doc or load_questions()
     profile = profile or cnsa.DEFAULT_PROFILE
-    with open(answers_path, encoding="utf-8") as f:
-        answers = json.load(f)
+    try:
+        with open(answers_path, "rb") as f:
+            raw = f.read()
+        answers = json.loads(raw.decode("utf-8"))
+    except OSError as e:
+        raise VendorInputError(f"--answers {answers_path}: {e.strerror}")
+    except (UnicodeDecodeError, ValueError) as e:
+        raise VendorInputError(f"--answers {answers_path}: not valid JSON ({e})")
+    if not isinstance(answers, dict) or not isinstance(answers.get("answers", {}), dict):
+        raise VendorInputError(f"--answers {answers_path}: expected an object with an \"answers\" object "
+                               "(start from `vendor_readiness.py template`)")
+    for qid, a in answers.get("answers", {}).items():
+        if not isinstance(a, dict) or not isinstance(a.get("claims", {}) or {}, dict) \
+                or not isinstance(a.get("evidence", []) or [], list) \
+                or not isinstance(a.get("answer", "") or "", str):
+            raise VendorInputError(f"--answers {answers_path}: answer {qid!r} must be an object with \"answer\" "
+                                   "text, an \"evidence\" list and a \"claims\" object")
+    known = {q["id"] for q in doc["questions"]}
+    unknown = sorted(k for k in answers.get("answers", {}) if k not in known)
+    inputs = {"answers": {"file": os.path.basename(answers_path), "sha256": hashlib.sha256(raw).hexdigest()}}
     facts, ctx = None, {"profile": profile}
     cbom_path = answers.get("cbom") or ""
+    if cbom_path and not isinstance(cbom_path, str):
+        raise VendorInputError(f"--answers {answers_path}: \"cbom\" must be a file path")
     if cbom_path and not os.path.isabs(cbom_path):
         cbom_path = os.path.join(os.path.dirname(os.path.abspath(answers_path)), cbom_path)
-    if cbom_path and os.path.exists(cbom_path):
-        with open(cbom_path, encoding="utf-8") as f:
-            bom = json.load(f)
+    if cbom_path and not os.path.isfile(cbom_path):
+        raise VendorInputError(f"the answers name a CBOM at {cbom_path}, which does not exist (the path is relative "
+                               "to the answers file)")
+    if cbom_path:
+        try:
+            with open(cbom_path, "rb") as f:
+                craw = f.read()
+            bom = json.loads(craw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as e:
+            raise VendorInputError(f"CBOM {cbom_path}: not valid JSON ({e})")
+        if not isinstance(bom, dict) or not isinstance(bom.get("components", []) or [], list):
+            raise VendorInputError(f"CBOM {cbom_path}: not a CycloneDX document")
+        inputs["cbom"] = {"file": os.path.basename(cbom_path), "sha256": hashlib.sha256(craw).hexdigest()}
         facts = cbom_facts(bom, profile)
         ctx["pkic"] = pkic_entry_profile(cbom_path)
         snap, _ = cmvp.load_snapshot()
@@ -429,7 +518,20 @@ def assess(answers_path, profile=None, doc=None):
             results[q["id"]] = r
     return {"doc": doc, "answers": answers, "profile": profile, "facts": facts, "ctx": ctx,
             "results": results, "concerns": concerns(doc, answers, results, facts),
-            "cbom_path": cbom_path if facts is not None else ""}
+            "cbom_path": cbom_path if facts is not None else "", "unknown_ids": unknown, "inputs": inputs,
+            "run_date": datetime.date.today().isoformat()}
+
+
+def _cut(s, n):
+    return s if len(s) <= n else s[:n].rstrip() + " [... truncated; full text in the answers file]"
+
+
+def _toolkit_version():
+    try:
+        from tier2_pipeline import TOOLKIT_VERSION
+        return TOOLKIT_VERSION
+    except Exception:  # pragma: no cover
+        return "?"
 
 
 def _cell(s):
@@ -445,7 +547,19 @@ def report_md(res):
     answered = sum(1 for q in doc["questions"] if (A.get(q["id"]) or {}).get("answer", "").strip())
     L = [f"# Vendor PQC readiness: {ans.get('vendor') or '?'} {ans.get('product') or ''} {ans.get('version') or ''}".rstrip(),
          "",
-         f"Answers dated {ans.get('answered') or '?'}; verdict profile `{res['profile']}`.",
+         f"Answers dated {ans.get('answered') or '?'}; verdict profile `{res['profile']}`; assessed "
+         f"{res.get('run_date', '?')} with fedlin-pqc-toolkit {_toolkit_version()} (ruleset {cnsa.RULESET_VERSION}). "
+         "Inputs: " + ", ".join(f"{v['file']} (SHA-256 {v['sha256'][:16]}...)" for v in res.get("inputs", {}).values())
+         + ".",
+         "",
+         "> **Scope:** the vendor's own answers, checked against the CBOM the vendor supplied"
+         + (f" (declared coverage: {res['facts']['coverage']})" if res["facts"] else " (none supplied)")
+         + ". A check compares the answer with that CBOM only: it does not verify the CBOM, the product, or any "
+         "other version.  ",
+         "> **Not a determination.** \"consistent\" means the answer and the CBOM agree; it does not mean the "
+         "product is quantum-resistant or meets any requirement. \"contradicted\" means they disagree; it is a "
+         "question to put to the vendor, not a finding of bad faith. This is not a compliance determination, a "
+         "certification or a FIPS 140-3 validation.",
          "",
          "*" + attribution(doc) + "*",
          "",
@@ -461,6 +575,14 @@ def report_md(res):
         L += [f"> The vendor's CBOM declares {res['facts']['coverage']} coverage, so an algorithm missing from it "
               "may still be in the product: a claim that something is absent is \"not-evidenced\", never "
               "\"consistent\".", ""]
+    if res.get("unknown_ids"):
+        L += ["> Answers with ids that are not among the 31 questions were ignored: "
+              + ", ".join(res["unknown_ids"]) + ".", ""]
+    unrec = sorted({x["name"] for x in (res["facts"] or {}).get("algorithms", []) if not x["canonical"]})
+    if unrec:
+        L += ["> Algorithm names in the CBOM that the ruleset does not recognise (review them; this is not a "
+              "judgement that they are proprietary): " + ", ".join(_cell(n) or "(empty name)" for n in unrec[:20])
+              + ("" if len(unrec) <= 20 else f" and {len(unrec) - 20} more") + ".", ""]
     L += ["## Common concerns", ""]
     if res["concerns"]:
         L += [f"- **{c}:** {d}" for c, d in res["concerns"]]
@@ -478,7 +600,8 @@ def report_md(res):
         chk = f"**{r['status']}**: {r['detail']}" if r else "-"
         ev = "; ".join(a.get("evidence") or []) or "none cited"
         txt = (a.get("answer") or "").strip() or "*unanswered*"
-        L.append(f"| {q['id']} | {_cell(q['question'])} | {q['claim_type']} | {_cell(txt[:400])} | {_cell(ev[:200])} | {_cell(chk)} |")
+        L.append(f"| {q['id']} | {_cell(q['question'])} | {q['claim_type']} | {_cell(_cut(txt, 400))} | "
+                 f"{_cell(_cut(ev, 200))} | {_cell(chk)} |")
         nxt = doc["questions"][doc["questions"].index(q) + 1]["phase"] if q is not doc["questions"][-1] else None
         if nxt != phase:
             L.append("")
@@ -496,7 +619,11 @@ def summary(res):
             "questions": len(res["doc"]["questions"]), "checks": counts,
             "contradicted": sorted(k for k, v in res["results"].items() if v["status"] == "contradicted"),
             "concerns": [c for c, _ in res["concerns"]], "cbom": bool(res["facts"]),
-            "cbom_coverage": res["facts"]["coverage"] if res["facts"] else None}
+            "cbom_coverage": res["facts"]["coverage"] if res["facts"] else None,
+            "statuses": {k: v["status"] for k, v in sorted(res["results"].items())},
+            "unknown_ids": res.get("unknown_ids", []), "inputs": res.get("inputs", {}),
+            "toolkit_version": _toolkit_version(), "ruleset_version": cnsa.RULESET_VERSION,
+            "assessed": res.get("run_date")}
 
 
 def main(argv=None):
@@ -522,7 +649,13 @@ def main(argv=None):
             f.write("\n")
         print(f"[ok] {a.out}: fill in answers, evidence and claims; set 'cbom' to the vendor's CBOM path")
         return 0
-    res = assess(a.answers, a.profile, doc)
+    try:
+        res = assess(a.answers, a.profile, doc)
+    except VendorInputError as e:
+        sys.stderr.write(f"[error] {e}\n")
+        return 2
+    if res["unknown_ids"]:
+        sys.stderr.write(f"[warn] ignored answers with unknown question ids: {', '.join(res['unknown_ids'])}\n")
     out = a.out or a.answers.rsplit(".", 1)[0] + ".report.md"
     with open(out, "w", encoding="utf-8") as f:
         f.write(report_md(res) + "\n")
