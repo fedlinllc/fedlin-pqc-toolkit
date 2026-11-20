@@ -223,6 +223,25 @@ class OlderOpenSSL(unittest.TestCase):
         self.assertIn("secp224r1", tp._CLASSICAL_GROUPS_FIPS.split(":"))
 
 
+class LegacyOnlyGaps(unittest.TestCase):
+    """1.7.0: a client lacking only legacy curves (RHEL: no sect*) still makes a complete modern offer."""
+    LACKS = ("sect163r1", "sect193r1", "sect193r2", "sect239k1")
+
+    def test_rejection_stays_rejected(self):
+        run, _ = fake_openssl([REJECT], self.LACKS)
+        with mock.patch.object(tp, "run", side_effect=run), mock.patch.dict(tp._GROUP_SUPPORT, clear=True), \
+             mock.patch.object(tp, "_default_probe_image", return_value=""), \
+             mock.patch.dict("os.environ", {"FEDLIN_KEX_PROBE_IMAGE": "", "FEDLIN_KEX_PROBE_OPENSSL": ""}):
+            r = tp._probe_classical_only("svc.example.org")
+        self.assertEqual((r["outcome"], r["offer_complete"]), ("rejected", True))
+        self.assertEqual(r["not_offered"], list(self.LACKS))
+        b = tp.CBOM("t", "1", {})
+        b.add_tls_kex("svc.example.org", "X25519", "TLSv1.3", "TLS_AES_256_GCM_SHA384", None, r)
+        props = {p["name"]: p["value"] for p in b.components[-1]["properties"]}
+        self.assertNotIn("fedlin:classicalOnlyOfferReduced", props)
+        self.assertEqual(props["fedlin:classicalOnlyNotOffered"], ",".join(self.LACKS))
+
+
 # ---------- 5. machine outputs keep raw values; Markdown and HTML get them inert ----------
 RAW = "R&D <core> | prod\\x"
 
@@ -311,3 +330,34 @@ class CutEquivalence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Review170(unittest.TestCase):
+    """Fresh review of the 1.7.0 change set."""
+
+    def test_vendor_readiness_key_size_still_counts(self):
+        import vendor_readiness as vr
+        f = vr.cbom_facts({"components": [{"type": "cryptographic-asset", "bom-ref": "a", "name": "RSA",
+                                           "cryptoProperties": {"assetType": "algorithm", "algorithmProperties":
+                                                                {"parameterSetIdentifier": "1024"}}}]}, "civilian")
+        self.assertEqual(f["algorithms"][0]["priority"], "Critical")
+
+    def test_bom_and_nulls_load(self):
+        import policy
+        with tempfile.TemporaryDirectory() as d:
+            for name, raw in (("bom.json", b'\xef\xbb\xbf{"bomFormat":"CycloneDX","components":[]}'),
+                              ("null.json", b'{"bomFormat":"CycloneDX","components":null}'),
+                              ("cp.json", b'{"components":[{"type":"cryptographic-asset","name":"x",'
+                                          b'"cryptoProperties":null,"properties":null}]}')):
+                p = os.path.join(d, name)
+                with open(p, "wb") as fh:
+                    fh.write(raw)
+                self.assertIsInstance(policy.evaluate(p)["findings"], list, name)
+
+    def test_legacy_curve_handshake_on_dhe_is_not_a_group(self):
+        out = ("=== LEGACYCURVES\nCONNECTED(00000003)\nServer Temp Key: DH, 2048 bits\n"
+               "New, TLSv1.2, Cipher is DHE-RSA-AES128-GCM-SHA256\n")
+        r = tp._parse_enum(out)
+        self.assertNotIn("DH", r["groups"])
+        self.assertNotIn("legacy_curves", r)
+        self.assertTrue(r["versions"]["TLSv1.2"])

@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.5"
+RULESET_VERSION = "1.0.6"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -49,6 +49,8 @@ SOURCES = {
     "CNSA2": "NSA Commercial National Security Algorithm Suite 2.0 (ML-KEM-1024, ML-DSA-87, LMS/XMSS, "
              "AES-256, SHA-384/512)",
     "SP800-57": "NIST SP 800-57 Part 1 Rev. 5, Table 2 (comparable security strengths)",
+    "SP800-186": "NIST SP 800-186, Recommendations for Discrete Logarithm-based Cryptography: Elliptic Curve "
+                 "Domain Parameters (Feb 2023): binary-field curves deprecated",
     "SP800-131A": "NIST SP 800-131A Rev. 2, Transitioning the Use of Cryptographic Algorithms and Key Lengths",
     "SP800-131A-R3-IPD": "NIST SP 800-131A Rev. 3 initial public draft (Oct 2024; still a draft), Tables 12 and 14: "
                          "SHA-1 and the 224-bit hashes (incl. in HMAC generation) deprecated through 2030, "
@@ -593,8 +595,20 @@ CURVES = {
     "p224": 224, "secp224r1": 224, "nistp224": 224,
     "p192": 192, "secp192r1": 192, "prime192v1": 192, "nistp192": 192,
     "secp256k1": 256, "brainpoolp256r1": 256, "brainpoolp384r1": 384, "brainpoolp512r1": 512,
+    # Legacy SEC 2 / X9.62 / RFC 5639 curves (1.0.6; before, a bare name was unknown and read Review). The size is
+    # the field size: under 224 bits is under 112-bit security, Critical (SP 800-57, SP 800-131A).
+    "secp160r1": 160, "secp160k1": 160, "secp160r2": 160, "secp192k1": 192, "secp224k1": 224,
+    "prime192v2": 192, "prime192v3": 192, "prime239v1": 239, "prime239v2": 239, "prime239v3": 239,
+    "brainpoolp160r1": 160, "brainpoolp192r1": 192, "brainpoolp224r1": 224, "brainpoolp320r1": 320,
+    "sect163k1": 163, "sect163r1": 163, "sect163r2": 163, "sect193r1": 193, "sect193r2": 193,
+    "sect233k1": 233, "sect233r1": 233, "sect239k1": 239, "sect283k1": 283, "sect283r1": 283,
+    "sect409k1": 409, "sect409r1": 409, "sect571k1": 571, "sect571r1": 571,
 }
-NON_NIST_CURVES = {"secp256k1", "brainpoolp256r1", "brainpoolp384r1", "brainpoolp512r1"}
+BINARY_CURVES = {k for k in CURVES if k.startswith("sect")}
+NON_NIST_CURVES = {"secp256k1", "brainpoolp256r1", "brainpoolp384r1", "brainpoolp512r1", "secp160r1", "secp160k1",
+                   "secp160r2", "secp192k1", "secp224k1", "prime192v2", "prime192v3", "prime239v1", "prime239v2",
+                   "prime239v3", "brainpoolp160r1", "brainpoolp192r1", "brainpoolp224r1", "brainpoolp320r1",
+                   "sect163r1", "sect193r1", "sect193r2", "sect239k1"}
 
 # SSH key-exchange names (exact, compact form) -> (canonical id, bits or None, extra component)
 SSH_KEX = {
@@ -635,6 +649,13 @@ TLS_GROUPS = {
     "brainpoolp512r1tls13": ("ecdh", 512),
     # RFC 7027 TLS 1.2 brainpool groups; OpenSSL also names the TLS 1.3 key exchange this way on its Temp Key line
     "brainpoolp256r1": ("ecdh", 256), "brainpoolp384r1": ("ecdh", 384), "brainpoolp512r1": ("ecdh", 512),
+    # RFC 8422 / IANA TLS supported groups 1-22, deprecated legacy curves (1.0.6; before, a bare name was unknown
+    # or an EC public key): key exchange when named as a TLS group; under 224 bits Critical
+    **{n: ("ecdh", CURVES[n]) for n in ("sect163k1", "sect163r1", "sect163r2", "sect193r1", "sect193r2",
+                                        "sect233k1", "sect233r1", "sect239k1", "sect283k1", "sect283r1",
+                                        "sect409k1", "sect409r1", "sect571k1", "sect571r1", "secp160k1",
+                                        "secp160r1", "secp160r2", "secp192k1", "secp192r1", "secp224k1",
+                                        "secp224r1", "secp256k1")},
 }
 
 # Classical halves of an ML-KEM hybrid name (compact spelling, longest first)
@@ -759,6 +780,14 @@ def normalize(name, bits=None):
         return [(cid, b, raw)], b
 
     toks = _tokens(low)
+
+    # 3b. LMS / HSS / LM-OTS parameter-set names (RFC 8554, SP 800-208: LMS_SHA256_M32_H10, lms-sha256-m24-h20,
+    # LMOTS_SHAKE_N32_W8). Before 1.0.6 the hash token won and they read as SHA-256 (hash lane).
+    if re.match(r"^(?:hss[-_ ]?)?(?:lms|lmots|lm-ots|hss)[-_ ]?(?:sha-?256|shake(?:256)?)(?:[-_/ ]|$)", low):
+        return [("lms", None, raw)], None
+    # XMSS / XMSS^MT parameter-set names (RFC 8391, SP 800-208: XMSS-SHA2_10_256, XMSSMT-SHA2_20/2_256)
+    if re.match(r"^xmss(?:mt|\^mt)?[-_ ]?(?:sha-?2|shake)", low):
+        return [("xmss", None, raw)], None
 
     # 4. Explicit PQC parameter sets inside longer names. The parameter set must end there: "mlkem10240" is not
     # ML-KEM-1024. A name marked as the 2023 initial public draft ("-ipd") is that draft, not the standard.
@@ -1191,6 +1220,9 @@ def classify(name, bits=None, profile=None):
         v["note"] += f" {curve} is not a NIST-approved curve."
         if v["standard_status"] == "nist":
             v["standard_status"] = "non-nist"
+    if curve in BINARY_CURVES:
+        v["note"] += f" {curve} is a binary-field curve; NIST SP 800-186 deprecates these."
+        v["cite"] = sorted(set(v.get("cite") or []) | {"SP800-186"})
     # A TLS/SSL cipher suite or an OpenSSH transport cipher protects data in transit: SC-8, not SC-28 (data at
     # rest), which the bare cipher carries (1.0.5; before, TLS_AES_256_GCM_SHA384 cited SC-28).
     if _is_transport_name(name, len(verdicts)) and "SC-28" in v["controls"]:
@@ -1309,3 +1341,17 @@ def registry_name(name, bits=None, curve_bits=None):
     if cid == "elgamal":
         return "ElGamal", "ElGamal"
     return None, None
+
+
+def name_with_parameter_set(name, parameter_set):
+    """The name to judge for a CycloneDX algorithm whose name has no parameter set but whose
+    algorithmProperties.parameterSetIdentifier does (ML-KEM + 1024 is ML-KEM-1024). Joined only when the ruleset
+    recognises the joined name as something more specific than the bare one: for RSA and EC keys the field holds
+    the key size, and rsaEncryption + 2048 stays rsaEncryption (the size is passed as bits instead). 1.0.6."""
+    name = (name or "").strip()
+    ps = str(parameter_set or "").strip()
+    if not ps or re.search(r"\d", name) or not re.fullmatch(r"[0-9A-Za-z]{1,8}", ps):
+        return name
+    joined = f"{name}-{ps}"
+    got = classify(joined).get("canonical")
+    return joined if got and got != classify(name).get("canonical") else name

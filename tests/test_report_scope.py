@@ -44,3 +44,15 @@ class ReportScope(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodeSpanPipe(unittest.TestCase):
+    """1.7.0: a backslash before a pipe in a code span never leaves the pipe unescaped (markdown-it counts them)."""
+
+    def test_one_backslash_before_every_pipe(self):
+        import re as _re
+        for raw in ("a\\|b", "a\\\\|b", "x\\", "|", "\\|\\|", "p\\" + "&#124;q"):
+            out = report.md_code(report.md_text(raw))
+            for m in _re.finditer(r"\|", out):
+                run = _re.match(r"\\*", out[:m.start()][::-1]).group(0)
+                self.assertEqual(len(run), 1, (raw, out))

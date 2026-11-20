@@ -11,6 +11,94 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.7.0-rc.1] - 2026-11-19
+
+Release candidate: proves the new release SBOM steps. Ruleset 1.0.6 (see [CORRECTIONS.md](CORRECTIONS.md)).
+
+### Changed
+- **Ruleset 1.0.6: legacy curves are judged.** Bare names such as `secp160r1` and `sect163k1` were unknown
+  (Review). Curves under 112-bit security are now Critical and the rest High (quantum-vulnerable); binary-field
+  curves note their deprecation in NIST SP 800-186. Named as TLS groups they are key exchange, which moves
+  `secp192r1`, `secp224r1` and `secp256k1` from the public-key lane to key-establishment.
+- **Ruleset 1.0.6: LMS and XMSS parameter-set names are signatures.** `LMS_SHA256_M32_H10`, `LMOTS_SHA256_N32_W8`
+  and the like read as SHA-256 hashes, and `XMSSMT-SHA2_20/2_256` was unknown; they are now the stateful hash-based
+  signatures of NIST SP 800-208 (quantum-resistant).
+- **Ruleset 1.0.6: the parameter set in `parameterSetIdentifier` counts.** A CBOM entry named `ML-KEM` with
+  parameter set `1024` was judged as an unknown ML-KEM parameter set (Review); it is now ML-KEM-1024. The join
+  happens only when the ruleset recognises the joined name, so an RSA or EC key size in that field is still used
+  as the key size (`rsaEncryption` + `2048` stays RSA-2048). Vendor readiness uses the same rule.
+- **High-impact systems default to a 2030 horizon.** In a context file, a system of FIPS 199 `high` impact, or one
+  marked `"highValueAsset": true` (new, schema `fedlin.pqc-context` 1.1; 1.0 files are still read), is judged
+  for urgency against 2030 (NIST IR 8547 and OMB M-26-15: post-quantum key establishment by 2030-12-31); other
+  systems keep 2035. A file-level `horizon` still overrides every system. This reverses the 1.3.0 choice to make
+  2030 opt-in, whose premise (that "high impact" here meant only the NSM-10 definition) was wrong. Urgency can
+  change for high-impact systems: an exposed endpoint whose data must stay confidential past 2030 is now urgent.
+  The attention result adds `highImpactHorizon`, `highImpactHorizonSource`, `systemsOnHighImpactHorizon` and a
+  per-endpoint `horizon`.
+- **Attention rows show each system's own values.** An endpoint matched by several systems showed the highest
+  impact, longest data lifetime and longest migration time, possibly from different systems, while urgency was
+  decided per system, so the row's numbers could not reproduce its verdict. Each row in `attention.json` now adds
+  `perSystem` (each system's impact, lifetime, migration time, horizon and, when exposed, its own result) and
+  `urgencyDecidedBy`. The combined fields stay, documented as maximums.
+
+### Added
+- README: `--profile nss` in the quick start, a sample wave file, a context example that
+  matches the quick-start scan (tested), and a known limit for `run-cbomkit.sh` (not run against a live CBOMkit;
+  use `--merge-cbom`).
+- The report's server configuration table names the key exchange negotiated at each endpoint.
+- `fedlin:certificateProbeKeys` on enumerated TLS interfaces: the key type of the certificate each signature-family
+  probe received. `fedlin:certificateProbes` is unchanged; its `certificate` means the probe got a certificate
+  back, which could be of another family (for example `ML-DSA:certificate` with an RSA key when the server ignores
+  the ML-DSA offer), and read on its own suggested ML-DSA was present.
+- `tier2_pipeline.py --fail-on broken,vulnerable,transitional,unclassified,incomplete`: a CI gate. A run that
+  finds any listed status exits `3` after writing all its output; `2` still means the scan itself failed, so a
+  crashed tool is never mistaken for a finding. `vulnerable` includes `broken`; `incomplete` means a TLS endpoint
+  whose key exchange was not observed. An unknown status is an argument error (exit `2`).
+
+### Fixed
+- **Release SBOMs describe what ships.** The only SBOM was a scan of the source tree (npm manifests and GitHub
+  Actions), named "." and in CycloneDX 1.7, while the toolkit's own CBOMs are 1.6. Each release now carries
+  `fedlin-pqc-toolkit-<v>.source.sbom.cdx.json` (named for the toolkit, CycloneDX 1.6) and an SBOM of each image
+  read from its pushed digest (`fedlin-pqc-toolkit-<v>.image.sbom.cdx.json`,
+  `fedlin-pqc-toolkit-probe-<v>.image.sbom.cdx.json`), all covered by `SHA256SUMS` and the provenance.
+- **Endpoints that accept only ML-KEM are no longer dropped.** A server offering only pure ML-KEM groups (CNSA 2.0
+  style) completed no scan handshake, so it vanished from the inventory, or the run exited `2` as if nothing were
+  reachable. The enumeration now adds a TLS 1.3 handshake offering only MLKEM1024, MLKEM768 and MLKEM512 and
+  captures the certificate from it, and the key-exchange probe also offers pure ML-KEM after the hybrids. Checked
+  against a live server accepting only ML-KEM-1024: 1.6.0 exits `2`; 1.7.0 records ML-KEM-1024, TLS 1.3 only and
+  classical clients refused.
+- `wave.py check` compared the planning baseline by its bytes only, so the same scan re-serialised (reformatted
+  JSON) was accepted as the later scan and checked against itself. `wave_draft.py` now records the baseline's
+  serial number and timestamp (wave schema `fedlin.pqc-wave` 1.1; 1.0 files are still read), and `check` refuses
+  a CBOM with that serial number or a timestamp that is not newer.
+- Unreadable input no longer ends in a Python traceback. JSON nested too deeply to parse, or a CBOM that is not a
+  CycloneDX object (for example a JSON list), made `policy.py`, `report.py`, `wave.py`, `wave_draft.py` and
+  `context.py` exit `1` with a traceback; `report.py` also blamed it on the CBOM changing after its policy result.
+  They now print `[error]` with the file and the reason and exit `2`. `report.py` still exits `1`, with that
+  message, only for a real digest mismatch. (The pipeline already exited `2` from 1.5.0.)
+- The report counted pure ML-KEM (recorded as `ML-KEM-1024`) as no post-quantum key exchange ("0 of 1 TLS
+  endpoints"); the wave check's nss note had the same mismatch.
+- **Endpoints that accept only legacy curves are no longer dropped.** A server whose only ECDHE curves are legacy
+  ones (secp256k1, secp224r1, the sect curves and the like) completed no enumeration handshake and was reported as
+  refusing every handshake ("may offer only 3DES, RC4, export"), or the run exited `2`. The enumeration now adds a
+  TLS 1.2 handshake offering the legacy curves the client accepts and captures the certificate; the curve is
+  recorded as negotiated and accepted and judged like any other. Checked against a live secp256k1-only server.
+- Report tables: a name with a backslash just before a `|`, shown in a code span, became `\\|`, which renderers
+  that count backslashes (markdown-it) read as a new column, so a crafted certificate subject or merged-CBOM
+  name could split a table cell. Every pipe in a code span now has exactly one backslash before it.
+- Classical-only probe: a client OpenSSL lacking only legacy curves (RHEL builds drop the binary `sect*` curves)
+  marked its offer reduced, so every rejection read `inconclusive`. Missing legacy curves are now recorded in the
+  new `fedlin:classicalOnlyNotOffered` and a rejection stays `rejected`; a missing modern group still makes the
+  offer reduced.
+- From an independent review of this release: a CBOM saved with a UTF-8 byte-order mark (PowerShell's
+  `Out-File -Encoding UTF8`) is read again, as in 1.6.0; `"components": null` and null `cryptoProperties` or
+  `properties` no longer end in a traceback; `--fail-on incomplete` also counts endpoints that answered but
+  completed no handshake; the legacy-curve handshake records a group only if it is a legacy curve (a server that
+  picked DHE added a sizeless `DH`); the wave check compares timestamps as instants; the attention note for a
+  horizon before the scan year counts the 2030 horizon.
+- A key-exchange probe that gets no answer (host OpenSSL, bundled probe or probe container) is retried once
+  before falling back, so one dropped handshake no longer flips the same endpoint to Incomplete between runs.
+
 ## [1.6.0] - 2026-11-19
 
 Ruleset 1.0.5 (unchanged). Includes everything in 1.6.0-rc.1 (two container images per ADR-066) and the fixes
@@ -378,7 +466,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0-rc.1...HEAD
+[1.7.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...v1.7.0-rc.1
 [1.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0
 [1.6.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0-rc.1
 [1.5.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.1...v1.5.2

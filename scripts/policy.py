@@ -50,6 +50,34 @@ class DigestMismatch(Exception):
     pass
 
 
+class InputError(ValueError):
+    """A CBOM or result file that cannot be read as JSON of the expected shape (exit 2, never a traceback)."""
+
+
+def load_json(path, what="--cbom", cyclonedx=True):
+    """Parsed JSON from path; InputError for unreadable, invalid or too deeply nested JSON, or (cyclonedx) a
+    document that is not a CycloneDX object with a components list."""
+    try:
+        with open(path, "rb") as f:
+            doc = json.loads(f.read())      # bytes: UTF-8 with or without a BOM, UTF-16 and UTF-32
+    except OSError as e:
+        raise InputError(f"{what} {path}: {e.strerror}")
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
+        raise InputError(f"{what} {path}: not valid JSON ({str(e)[:120]})")
+    if cyclonedx and (not isinstance(doc, dict) or not isinstance(doc.get("components", []) or [], list)
+                      or not all(isinstance(c, dict) for c in doc.get("components", []) or [])):
+        raise InputError(f"{what} {path}: not a CycloneDX BOM (expected an object with a components list)")
+    if not cyclonedx and not isinstance(doc, dict):
+        raise InputError(f"{what} {path}: expected a JSON object")
+    if cyclonedx:
+        doc["components"] = doc.get("components") or []        # absent or null: no components
+        for c in doc["components"]:     # a null where an object or list belongs means "none", not a traceback
+            for k in ("cryptoProperties", "properties", "components", "evidence"):
+                if k in c and c[k] is None:
+                    del c[k]
+    return doc
+
+
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -63,7 +91,7 @@ def _ruleset_digest():
 
 
 def _props(c):
-    return {p.get("name"): p.get("value") for p in c.get("properties", [])}
+    return {p.get("name"): p.get("value") for p in (c.get("properties") or [])}
 
 
 def _bits(ap):
@@ -91,20 +119,21 @@ def evaluate(cbom_path, profile=None, regime=None, date=None):
     if profile not in cnsa.PROFILES:
         raise ValueError(f"unknown profile {profile!r}")
     date = date or datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    bom = load_json(cbom_path)
     with open(cbom_path, "rb") as f:
         data = f.read()
-    bom = json.loads(data)
     doc = os.path.basename(cbom_path)
 
     findings, refs = [], {}
     for c in bom.get("components", []):
         if c.get("type") != "cryptographic-asset":
             continue
-        cp = c.get("cryptoProperties", {})
+        cp = c.get("cryptoProperties") or {}
         if cp.get("assetType") != "algorithm":
             continue
-        ap = cp.get("algorithmProperties", {})
-        v = cnsa.classify(c.get("name", ""), _bits(ap), profile=profile)
+        ap = cp.get("algorithmProperties") or {}
+        judged = cnsa.name_with_parameter_set(c.get("name", ""), ap.get("parameterSetIdentifier"))
+        v = cnsa.classify(judged, None if judged != (c.get("name") or "").strip() else _bits(ap), profile=profile)
         f = {
             "document": doc, "bomRef": c.get("bom-ref"), "name": c.get("name"),
             "canonical": v["canonical"], "lane": v["lane"], "status": _status(v),
@@ -131,7 +160,7 @@ def evaluate(cbom_path, profile=None, regime=None, date=None):
         p = _props(c)
         if "fedlin:hndl_exposure" not in p:
             continue
-        rcm = c.get("cryptoProperties", {}).get("relatedCryptoMaterialProperties", {})
+        rcm = (c.get("cryptoProperties") or {}).get("relatedCryptoMaterialProperties") or {}
         alg = refs.get(rcm.get("algorithmRef"))
         vuln = bool(alg and alg["quantumVulnerable"])
         findings.append({
@@ -297,7 +326,7 @@ def apply(bom, result, cbom_path=None):
         f = by_ref.get(c.get("bom-ref"))
         if not f:
             continue
-        props = [p for p in c.get("properties", [])
+        props = [p for p in (c.get("properties") or [])
                  if not p.get("name", "").startswith(VERDICT_PREFIXES) and p.get("name") not in VERDICT_NAMES]
         if f.get("lane") == "hndl":
             props.append({"name": "cnsa2:priority", "value": f["priority"]})
@@ -317,7 +346,7 @@ def apply(bom, result, cbom_path=None):
         c["properties"] = props
     for c in view.get("components", []):
         if c.get("bom-ref") in config:
-            c["properties"] = [p for p in c.get("properties", []) if p.get("name") != "cnsa2:config"] + [
+            c["properties"] = [p for p in (c.get("properties") or []) if p.get("name") != "cnsa2:config"] + [
                 {"name": "cnsa2:config", "value": json.dumps(config[c["bom-ref"]], separators=(",", ":"))}]
     view.setdefault("metadata", {}).setdefault("properties", [])
     view["metadata"]["properties"] = [p for p in view["metadata"]["properties"]
@@ -334,7 +363,7 @@ def apply(bom, result, cbom_path=None):
 def has_verdicts(bom):
     """True for a legacy CBOM that carries verdicts inline (pre-split toolkit output)."""
     return any(p.get("name") == "cnsa2:quantum_vulnerable"
-               for c in bom.get("components", []) for p in c.get("properties", []))
+               for c in bom.get("components", []) for p in (c.get("properties") or []))
 
 
 def strip_verdicts(bom):
@@ -356,11 +385,9 @@ def strip_verdicts(bom):
 def load_view(cbom_path, policy_path=None, profile=None, regime=None):
     """CBOM + verdicts for reporting. Uses the policy file if given (digest-verified); otherwise
     evaluates the CBOM now. Returns (view, result)."""
-    with open(cbom_path) as f:
-        bom = json.load(f)
+    bom = load_json(cbom_path)
     if policy_path:
-        with open(policy_path) as f:
-            result = json.load(f)
+        result = load_json(policy_path, "--policy", cyclonedx=False)
         return apply(bom, result, cbom_path), result
     result = evaluate(cbom_path, profile=profile, regime=regime)
     return apply(bom, result), result
@@ -380,6 +407,14 @@ def main(argv=None):
     v.add_argument("--cbom", required=True)
     v.add_argument("--policy", required=True)
     a = ap.parse_args(argv)
+    try:
+        return _main(a)
+    except InputError as e:
+        sys.stderr.write(f"[error] {e}\n")
+        return 2
+
+
+def _main(a):
     if a.cmd == "evaluate":
         r = evaluate(a.cbom, a.profile, a.regime or None, a.date)
         out = a.out or a.cbom.rsplit(".", 1)[0] + ".policy.json"
@@ -388,8 +423,8 @@ def main(argv=None):
         print(f"[ok] policy result: {out}: {r['policy']['policyId']} {r['policy']['version']}, "
               f"{len(r['findings'])} finding(s): {r['summary']}")
         return 0
-    with open(a.policy) as f:
-        r = json.load(f)
+    r = load_json(a.policy, "--policy", cyclonedx=False)
+    load_json(a.cbom)
     c = check(r, a.cbom)
     pol = r.get("policy", {}) or {}
     print(f"[{'ok' if c['bound'] else 'FAIL'}] CBOM digest {'matches' if c['bound'] else 'does not match'} {a.policy}")

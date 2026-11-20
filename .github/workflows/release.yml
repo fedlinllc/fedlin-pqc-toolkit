@@ -48,21 +48,19 @@ jobs:
           # fixed name so the current table is always at .../releases/latest/download/verdicts.json;
           # the ruleset version is inside the file
           python3 scripts/verdict_table.py build --out dist/verdicts.json
-      - name: SBOM of the toolkit
+      # Source SBOM: what the tarball's manifests declare (npm packages, pinned actions). Named for the toolkit, not
+      # ".", and CycloneDX 1.6 like the toolkit's own CBOMs. The images get their own SBOMs below (1.7.0).
+      - name: SBOM of the source
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        env:
+          SYFT_SOURCE_NAME: fedlin-pqc-toolkit
+          SYFT_SOURCE_VERSION: ${{ steps.v.outputs.version }}
         with:
           path: .
-          format: cyclonedx-json
-          output-file: dist/fedlin-pqc-toolkit-${{ steps.v.outputs.version }}.sbom.cdx.json
+          format: cyclonedx-json@1.6
+          output-file: dist/fedlin-pqc-toolkit-${{ steps.v.outputs.version }}.source.sbom.cdx.json
           upload-artifact: false
           upload-release-assets: false
-      - name: Checksums
-        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
-      - name: Provenance for the release files
-        id: prov
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
-        with:
-          subject-path: dist/*
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
         with:
@@ -122,6 +120,42 @@ jobs:
           subject-name: ${{ env.IMAGE }}-probe
           subject-digest: ${{ steps.probe.outputs.digest }}
           push-to-registry: true
+      # Image SBOMs: the packages actually inside each image (UBI RPMs, Node modules, the probe's Alpine OpenSSL),
+      # read from the pushed digest (1.7.0; before, the only SBOM was of the source tree).
+      - name: SBOM of the image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        env:
+          SYFT_SOURCE_NAME: ${{ env.IMAGE }}
+          SYFT_SOURCE_VERSION: ${{ steps.v.outputs.version }}
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.image.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: cyclonedx-json@1.6
+          output-file: dist/fedlin-pqc-toolkit-${{ steps.v.outputs.version }}.image.sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM of the probe image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        env:
+          SYFT_SOURCE_NAME: ${{ env.IMAGE }}-probe
+          SYFT_SOURCE_VERSION: ${{ steps.v.outputs.version }}
+        with:
+          image: ${{ env.IMAGE }}-probe@${{ steps.probe.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: cyclonedx-json@1.6
+          output-file: dist/fedlin-pqc-toolkit-probe-${{ steps.v.outputs.version }}.image.sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      # checksums and provenance cover every release file, the image SBOMs included
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Provenance for the release files
+        id: prov
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/*
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

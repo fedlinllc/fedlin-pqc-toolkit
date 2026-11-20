@@ -38,7 +38,7 @@ CASES = [
     ("ECMQV", None, "High", "High", True, "mqv"),
     ("ElGamal", None, "High", "High", True, "elgamal"),
     ("brainpoolP256r1", None, "High", "High", True, "ecdh"),  # a TLS group (1.0.4)
-    ("secp256k1", None, "High", "High", True, "ec"),
+    ("secp256k1", None, "High", "High", True, "ecdh"),   # 1.0.6: a TLS group (key exchange)
     ("Curve25519", None, "High", "High", True, "x25519"),
     ("EdDSA", None, "High", "High", True, "eddsa"),
     ("TLSv1.0", None, "Critical", "Critical", True, "tls-legacy"),
@@ -229,3 +229,68 @@ class RsaSignatures(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParameterSet106(unittest.TestCase):
+    """Ruleset 1.0.6: a bare name takes parameterSetIdentifier only when that names a more specific algorithm."""
+
+    def test_helper(self):
+        f = r.name_with_parameter_set
+        self.assertEqual(f("ML-KEM", "1024"), "ML-KEM-1024")
+        self.assertEqual(f("ML-DSA", "65"), "ML-DSA-65")
+        self.assertEqual(f("rsaEncryption", "2048"), "rsaEncryption")
+        self.assertEqual(f("id-ecPublicKey", "256"), "id-ecPublicKey")
+        self.assertEqual(f("ML-KEM-768", "1024"), "ML-KEM-768")      # the name already has one
+        self.assertEqual(f("ML-KEM", "x y"), "ML-KEM")
+
+    def test_policy_verdicts(self):
+        import tempfile, json as _j
+        import policy
+        def alg(ref, name, ps):
+            return {"type": "cryptographic-asset", "bom-ref": ref, "name": name,
+                    "cryptoProperties": {"assetType": "algorithm",
+                                         "algorithmProperties": {"parameterSetIdentifier": ps}}}
+        with tempfile.TemporaryDirectory() as d:
+            p = d + "/c.json"
+            with open(p, "w") as fh:
+                _j.dump({"bomFormat": "CycloneDX", "specVersion": "1.6",
+                         "components": [alg("a", "ML-KEM", "1024"), alg("b", "rsaEncryption", "1024")]}, fh)
+            fs = {x["bomRef"]: x for x in policy.evaluate(p, "nss")["findings"]}
+        self.assertEqual(fs["a"]["canonical"], "ml-kem-1024")
+        self.assertEqual(fs["a"]["status"], "compliant")
+        self.assertEqual(fs["b"]["status"], "broken")               # 1024-bit RSA: the size still counts
+        self.assertEqual(fs["b"]["name"], "rsaEncryption")
+
+
+class LegacyCurves106(unittest.TestCase):
+    """Ruleset 1.0.6: legacy SEC 2 / X9.62 / brainpool curves are judged, not Review; under 112-bit security is Critical."""
+
+    def test_verdicts(self):
+        for name, prio, lane in (("secp160r1", "Critical", "key-establishment"),
+                                 ("sect163k1", "Critical", "key-establishment"),
+                                 ("sect193r1", "Critical", "key-establishment"),
+                                 ("secp192k1", "Critical", "key-establishment"),
+                                 ("brainpoolP160r1", "Critical", "public-key"),
+                                 ("secp224k1", "High", "key-establishment"),
+                                 ("sect233k1", "High", "key-establishment"),
+                                 ("sect571r1", "High", "key-establishment"),
+                                 ("ECDHE-secp160r1", "Critical", "key-establishment")):
+            v = r.classify(name)
+            self.assertEqual((v["priority"], v["lane"]), (prio, lane), name)
+            self.assertTrue(v["quantum_vulnerable"], name)
+        self.assertIn("SP800-186", r.classify("sect163k1")["cite"])
+        self.assertEqual(r.classify("secp160r1")["standard_status"], "non-nist")
+        self.assertEqual(r.classify("secp256r1")["priority"], "High")       # unchanged
+
+
+class HashBasedSignatureNames106(unittest.TestCase):
+    """Ruleset 1.0.6: SP 800-208 parameter-set names are LMS / XMSS signatures, not their hash."""
+
+    def test_names(self):
+        for n in ("LMS_SHA256_M32_H10", "lms-sha256-m24-h20", "LMOTS_SHA256_N32_W8", "LMOTS_SHAKE_N32_W4", "HSS_SHA256"):
+            v = r.classify(n)
+            self.assertEqual((v["canonical"], v["lane"]), ("lms", "signature"), n)
+            self.assertFalse(v["quantum_vulnerable"], n)
+        self.assertEqual(r.classify("XMSSMT-SHA2_20/2_256")["canonical"], "xmss")
+        self.assertEqual(r.classify("SHA-256")["canonical"], "sha-256")       # a plain hash is still a hash
+        self.assertIsNone(r.classify("films")["canonical"])

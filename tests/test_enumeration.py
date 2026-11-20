@@ -195,3 +195,88 @@ class Fallbacks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PQOnly(unittest.TestCase):
+    """An endpoint that accepts only pure ML-KEM (CNSA 2.0 style) is captured, not dropped (1.7.0)."""
+    PQ = ("CONNECTED(00000003)\nNegotiated TLS1.3 group: MLKEM1024\nNew, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384\n"
+          + CERT.replace("rsaEncryption", "id-ecPublicKey").replace("(2048 bit)", "(384 bit)"))
+    OUT = "\n".join(["TOOL OpenSSL 3.5.9 test", "=== DEFAULT", REFUSED, "=== LEGACY", REFUSED,
+                     "=== VERSION TLSv1.2", REFUSED, "=== VERSION TLSv1.3", REFUSED,
+                     "=== GROUP13 MLKEM1024", OK13.replace("X25519MLKEM768", "MLKEM1024"),
+                     "=== GROUP13 X25519", REFUSED, "=== CERT ANY", REFUSED, "=== PQONLY", PQ])
+
+    def test_parse(self):
+        r = tp._parse_enum(self.OUT)
+        self.assertTrue(r["versions"]["TLSv1.3"])
+        self.assertEqual(r["pq_only"]["group"].lower(), "mlkem1024")
+        self.assertEqual(len(r["certs"]), 1)
+        self.assertEqual(r["certs"][0]["requested"], "ML-KEM only")
+        self.assertNotIn("ML-KEM only", r["cert_probes"])          # not a signature-family probe
+        self.assertEqual(tp._enum_session(r)["group"].lower(), "mlkem1024")
+
+    def test_capture_via_enumeration(self):
+        en = dict(tp._parse_enum(self.OUT), status="complete", client="bundled")
+        with mock.patch.object(tp, "enumerate_endpoint", return_value=en), \
+                mock.patch.object(tp, "_probe_classical_only", return_value=None):
+            c = tp._capture_via_enumeration("pq.example", 443)
+        self.assertIsNotNone(c)
+        self.assertEqual(c["kex_group"].lower(), "mlkem1024")
+        self.assertEqual(c["key_alg"], "id-ecPublicKey")
+
+    def test_script_offers_pure_mlkem(self):
+        sc = tp._enum_script("openssl", "h:443", "h")
+        self.assertIn("=== PQONLY", sc)
+        self.assertIn("-tls1_3 -groups MLKEM1024:MLKEM768:MLKEM512", sc)
+        self.assertIn("MLKEM1024", tp._KEX_GROUPS)
+
+
+class PureMLKEMCounts(unittest.TestCase):
+    def test_report_counts_pure_mlkem_as_pq_kex(self):
+        iface = {"type": "cryptographic-asset", "name": "TLS 1.3 - pq:443",
+                 "properties": [{"name": "pkic:profile:interfaceType", "value": "tls"},
+                                {"name": "pkic:profile:keyExchange", "value": "ML-KEM-1024"}]}
+        self.assertEqual(report.score_summary({"components": [iface]})["kex_pq"], ["TLS 1.3 - pq:443"])
+
+
+class CertificateProbeKeys(unittest.TestCase):
+    """1.7.0: "certificate" in fedlin:certificateProbes means an answer; fedlin:certificateProbeKeys says which key."""
+
+    def test_probe_keys(self):
+        out = OUT + "\n=== CERT ML-DSA\n" + CERT     # the server answered the ML-DSA probe with its RSA certificate
+        en = dict(tp._parse_enum(out), status="complete", client="host")
+        self.assertEqual(en["cert_probes"]["ML-DSA"], "certificate")
+        self.assertEqual(en["cert_probe_keys"], {"RSA": "rsaEncryption", "ML-DSA": "rsaEncryption"})
+        with tempfile.TemporaryDirectory() as d:
+            p = {x["name"]: x["value"] for c in _load(cbom(d, en))["components"] for x in c.get("properties", [])}
+        self.assertEqual(p["fedlin:certificateProbeKeys"], "RSA:rsaEncryption,ML-DSA:rsaEncryption")
+        self.assertIn("ML-DSA:certificate", p["fedlin:certificateProbes"])     # unchanged for existing readers
+
+
+class LegacyCurvesOnly(unittest.TestCase):
+    """An endpoint that accepts only legacy curves is captured, not reported as unreachable (1.7.0)."""
+    LC = ("CONNECTED(00000003)\nServer Temp Key: ECDH, secp256k1, 256 bits\n"
+          "New, TLSv1.2, Cipher is ECDHE-RSA-AES128-GCM-SHA256\n" + CERT)
+    OUT = "\n".join(["TOOL OpenSSL 3.5.9 test", "=== DEFAULT", REFUSED, "=== LEGACY", REFUSED,
+                     "=== VERSION TLSv1.2", REFUSED, "=== VERSION TLSv1.3", REFUSED,
+                     "=== GROUP12 secp256r1", REFUSED, "=== CERT ANY", REFUSED, "=== LEGACYCURVES", LC,
+                     "=== PQONLY", REFUSED])
+
+    def test_parse_and_capture(self):
+        r = tp._parse_enum(self.OUT)
+        self.assertTrue(r["versions"]["TLSv1.2"])
+        self.assertEqual(r["legacy_curves"]["group"], "secp256k1")
+        self.assertTrue(r["groups"]["secp256k1"])
+        self.assertEqual(r["certs"][0]["requested"], "legacy curves only")
+        en = dict(r, status="complete", client="bundled")
+        with mock.patch.object(tp, "enumerate_endpoint", return_value=en), \
+                mock.patch.object(tp, "_probe_classical_only", return_value=None):
+            c = tp._capture_via_enumeration("lc.example", 443)
+        self.assertEqual(c["kex_group"], "secp256k1")
+        self.assertNotIn("no_handshake", c)
+
+    def test_script_checks_curve_support_first(self):
+        sc = tp._enum_script("openssl", "h:443", "h")
+        self.assertIn("=== LEGACYCURVES", sc)
+        self.assertIn("-connect 127.0.0.1:9 -groups \"$g\"", sc)     # names the client rejects are left out
+        self.assertIn("-tls1_2", sc.split("=== LEGACYCURVES")[1].split("=== PQONLY")[0])

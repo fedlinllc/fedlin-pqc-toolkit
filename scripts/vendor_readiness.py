@@ -91,14 +91,8 @@ def _algo_name(c, ap):
         return _NIST_OIDS[name or oid]
     if oid in _NIST_OIDS and not re.search(r"\d", name):
         return _NIST_OIDS[oid]
-    ps = str(ap.get("parameterSetIdentifier") or "").strip()
-    if ps and not re.search(r"\d", name) and re.fullmatch(r"[0-9A-Za-z]{1,8}", ps):
-        # Only when the ruleset knows the joined name: for RSA and EC keys this field holds the key size, and
-        # "rsaEncryption-2048" is not a name the ruleset recognises (regression in 1.5.2, fixed in 1.6.0).
-        joined = f"{name}-{ps}"
-        if cnsa.classify(joined).get("canonical"):
-            return joined
-    return name
+    # the ruleset's rule (1.6.0 here; shared from ruleset 1.0.6): rsaEncryption + 2048 stays rsaEncryption
+    return cnsa.name_with_parameter_set(name, ap.get("parameterSetIdentifier"))
 
 
 class VendorInputError(ValueError):
@@ -219,7 +213,10 @@ def cbom_facts(bom, profile):
         if at == "algorithm":
             ap = cp.get("algorithmProperties", {}) or {}
             name = _algo_name(c, ap)
-            r = cnsa.classify(name, profile=profile)
+            ps = str(ap.get("parameterSetIdentifier") or "").strip()
+            # not joined (an RSA/EC/DH key size): the size counts, as in policy.py (RSA + 1024 is Critical)
+            bits = int(ps) if ps.isdigit() and name == (c.get("name") or "").strip() else None
+            r = cnsa.classify(name, bits, profile=profile)
             algos.append({"ref": c.get("bom-ref"), "name": name, "canonical": r.get("canonical"),
                           "lane": r.get("lane"), "vulnerable": r.get("quantum_vulnerable"),
                           "standard": r.get("standard_status"), "family": r.get("family"),

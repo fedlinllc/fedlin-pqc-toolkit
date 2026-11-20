@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Business context for a scan: who owns each system, how long its data must stay confidential, how long
-migration takes, and how much it matters (schema fedlin.pqc-context 1.0, schemas/context-1.0.schema.json).
+migration takes, and how much it matters (schema fedlin.pqc-context 1.1, schemas/context-1.1.schema.json).
 
 Context never changes a verdict or a priority label. It adds two things:
   attention order   endpoints ranked by the severity of their worst finding and their FIPS 199 impact, with
@@ -21,10 +21,12 @@ Exposure per endpoint is one of:
   undetermined  anything else (key exchange not observed or not classified, or acceptance not enumerated).
 Only exposed endpoints get an urgency verdict; undetermined ones say so.
 
-The horizon is a policy date, not a forecast: by default 2035 (civilian: NIST IR 8547 disallows
-quantum-vulnerable signature and key-establishment schemes after 2035, all of them deprecated after 2030; nss: the
-NSM-10 goal of 2035, with CNSA 2.0 requiring exclusive use earlier, 2030 to 2033, for several categories).
-A context file can set its own. When a system gives no migration time, urgency uses the data lifetime alone
+The horizon is a policy date, not a forecast. Each system gets one: 2030 for a system of FIPS 199 high impact or
+marked a high-value asset (NIST IR 8547 and OMB M-26-15: post-quantum key establishment by the end of 2030), else
+2035 (civilian: NIST IR 8547 disallows quantum-vulnerable signature and key-establishment schemes after 2035, all
+of them deprecated after 2030; nss: the NSM-10 goal of 2035, with CNSA 2.0 requiring exclusive use earlier, 2030
+to 2033, for several categories). A context file's "horizon" overrides both for every system (1.7.0; before,
+every system used 2035 unless the file set its own). When a system gives no migration time, urgency uses the data lifetime alone
 and says so: understated, never invented.
 
 Systems match endpoints by pattern: a host glob (*.pay.example.gov; "*" also crosses dots), host:port, an IP
@@ -32,6 +34,8 @@ network (10.2.0.0/16), or an IP network with port (10.2.0.0/16:8443, [2001:db8::
 brackets to carry a port). IP networks match endpoints scanned by address only. An endpoint matching several
 systems takes the most demanding values (highest impact, longest lifetime, longest migration) and lists every
 owner; endpoints no system matches are listed as "no context", and systems that match nothing are listed too.
+
+Schema 1.1 (1.7.0) adds the optional system key "highValueAsset" (true/false); 1.0 files are still read.
 
 Usage:  python3 scripts/context.py rank --context context.json --cbom cbom.json [--profile civilian|nss] [--json OUT]
 Exit codes: 0 success, 2 invalid input.
@@ -49,9 +53,12 @@ import cnsa20_ruleset as cnsa  # noqa: E402
 import evidence as evmod  # noqa: E402
 import wave as wavemod  # noqa: E402
 
-SCHEMA, SCHEMA_VERSION = "fedlin.pqc-context", "1.0"
+SCHEMA, SCHEMA_VERSION = "fedlin.pqc-context", "1.1"
+SCHEMA_VERSIONS = ("1.0", "1.1")
 RESULT, RESULT_VERSION = "fedlin.pqc-attention", "1.0"
 DEFAULT_HORIZON = 2035
+HIGH_IMPACT_HORIZON = 2030
+HIGH_IMPACT_SOURCE = "NIST IR 8547 and OMB M-26-15: post-quantum key establishment by 2030-12-31"
 HORIZON_SOURCE = {
     "civilian": "NIST IR 8547: quantum-vulnerable signature and key-establishment schemes disallowed after 2035 "
                 "(all deprecated after 2030)",
@@ -61,6 +68,7 @@ IMPACT = {"low": 1, "moderate": 2, "high": 3}          # FIPS 199 impact levels
 SEVERITY = {"Critical": 4, "High": 3, "Review": 2, "Low": 1}   # Review (unclassified) ranks above Low
 TOP_KEYS = {"schema", "schemaVersion", "horizon", "systems"}
 SYSTEM_KEYS = {"name", "owner", "impact", "dataLifetimeYears", "migrationYears", "endpoints"}
+SYSTEM_KEYS_11 = SYSTEM_KEYS | {"highValueAsset"}
 OLD_TLS = {"SSLv3", "TLSv1", "TLSv1.0", "TLSv1.1", "TLSv1.2"}
 
 
@@ -82,10 +90,11 @@ def load_context(path, redact=()):
         for old, new in redact:
             text = text.replace(old, new)
         c = json.loads(text)
-    except (OSError, ValueError) as e:
-        raise ContextError(f"{path}: {e}")
-    if not isinstance(c, dict) or c.get("schema") != SCHEMA or c.get("schemaVersion") != SCHEMA_VERSION:
-        raise ContextError(f"{path}: not a {SCHEMA} {SCHEMA_VERSION} file")
+    except (OSError, ValueError, RecursionError) as e:
+        raise ContextError(f"{path}: {str(e)[:160]}")
+    if not isinstance(c, dict) or c.get("schema") != SCHEMA or c.get("schemaVersion") not in SCHEMA_VERSIONS:
+        raise ContextError(f"{path}: not a {SCHEMA} {' or '.join(SCHEMA_VERSIONS)} file")
+    allowed = SYSTEM_KEYS_11 if c["schemaVersion"] == "1.1" else SYSTEM_KEYS
     if set(c) - TOP_KEYS:
         raise ContextError(f"{path}: unknown key(s) {', '.join(sorted(set(c) - TOP_KEYS))}")
     h = c.get("horizon", DEFAULT_HORIZON)
@@ -99,8 +108,12 @@ def load_context(path, redact=()):
         where = f"{path}: systems[{i}]"
         if not isinstance(s, dict):
             raise ContextError(f"{where}: must be an object")
-        if set(s) - SYSTEM_KEYS:
-            raise ContextError(f"{where}: unknown key(s) {', '.join(sorted(set(s) - SYSTEM_KEYS))}")
+        if set(s) - allowed:
+            extra = sorted(set(s) - allowed)
+            hint = " (highValueAsset needs schemaVersion 1.1)" if "highValueAsset" in extra else ""
+            raise ContextError(f"{where}: unknown key(s) {', '.join(extra)}{hint}")
+        if "highValueAsset" in s and not isinstance(s["highValueAsset"], bool):
+            raise ContextError(f"{where}: highValueAsset must be true or false")
         name = s.get("name")
         if not isinstance(name, str) or not name.strip() or name.strip().lower() in names:
             raise ContextError(f"{where}: name must be a unique non-empty string")
@@ -181,7 +194,17 @@ def matches(pattern, ep):
     return fnmatch.fnmatchcase(host.rstrip("."), target)
 
 
-def combine(systems):
+def system_horizon(s, ctx_doc):
+    """(horizon year, source) for one system: the file's horizon if set, else 2030 for high impact or a
+    high-value asset, else 2035."""
+    if "horizon" in ctx_doc:
+        return ctx_doc["horizon"], "context file"
+    if s.get("impact") == "high" or s.get("highValueAsset") is True:
+        return HIGH_IMPACT_HORIZON, HIGH_IMPACT_SOURCE
+    return DEFAULT_HORIZON, None
+
+
+def combine(systems, ctx_doc=None):
     """Most demanding values over the systems matching one endpoint, and where each came from."""
     if not systems:
         return None
@@ -197,7 +220,10 @@ def combine(systems):
             "migrationYears": slowest["migrationYears"] if slowest else None,
             "_from": {"impact": imp["name"], "life": longest["name"] if longest else None,
                       "migration": slowest["name"] if slowest else None},
-            "_per": [(s["name"], s.get("dataLifetimeYears"), s.get("migrationYears")) for s in systems]}
+            "horizon": min(system_horizon(s, ctx_doc or {})[0] for s in systems),
+            "_per": [(s["name"], s.get("dataLifetimeYears"), s.get("migrationYears"),
+                      system_horizon(s, ctx_doc or {})[0]) for s in systems],
+            "_impact": {s["name"]: s["impact"] for s in systems}}
 
 
 def _mosca_one(life, mig, scan_year, horizon, name=None):
@@ -224,19 +250,32 @@ def mosca(ctx, scan_year, horizon):
     """(urgency, note) for an exposed endpoint: each matched system is evaluated with its own values and the
     most urgent result is reported, so no system borrows another's migration time. 'yes' | 'no' |
     'not assessed'."""
+    return mosca_detail(ctx, scan_year, horizon)[:2]
+
+
+def mosca_detail(ctx, scan_year, horizon):
+    """(urgency, note, deciding system names, per-system rows). Each row has the system's own values, horizon and
+    result, so the endpoint's urgency can be reproduced from one system's numbers (1.7.0)."""
     per = ctx.get("_per") or [(ctx.get("_from", {}).get("life"), ctx["dataLifetimeYears"], ctx["migrationYears"])]
-    results = [_mosca_one(life, mig, scan_year, horizon, name if len(per) > 1 else None) for name, life, mig in per]
-    yes = [r for r in results if r[0] == "yes"]
+    # each system is judged against its own horizon (1.7.0: 2030 for high impact); `horizon` is the fallback
+    hz = [e[3] if len(e) > 3 else horizon for e in per]
+    results = [_mosca_one(e[1], e[2], scan_year, h, e[0] if len(per) > 1 else None) for e, h in zip(per, hz)]
+    rows = [{"name": e[0], "impact": (ctx.get("_impact") or {}).get(e[0]), "dataLifetimeYears": e[1],
+             "migrationYears": e[2], "horizon": h, "urgent": r[0], "urgency": r[1]}
+            for e, h, r in zip(per, hz, results)]
+    named = list(zip(per, results))
+    yes = [(e, r) for e, r in named if r[0] == "yes"]
     if yes:
-        return "yes", max(yes, key=lambda r: r[3])[1]
+        e, r = max(yes, key=lambda x: x[1][3])
+        return "yes", r[1], [e[0]], rows
     # "no" is claimed only when every matched system was assessed; the row shows the system closest to the
     # horizon, plus every system whose urgency may be understated
-    unknown = [r for r in results if r[0] == "not assessed"]
+    unknown = [(e, r) for e, r in named if r[0] == "not assessed"]
     if unknown:
-        return "not assessed", "; ".join(r[1] for r in unknown)
-    best = max(results, key=lambda r: r[3])
-    under = [r for r in results if r[2] and r is not best]
-    return "no", "; ".join([best[1]] + [r[1] for r in under])
+        return "not assessed", "; ".join(r[1] for _, r in unknown), [e[0] for e, _ in unknown], rows
+    be, best = max(named, key=lambda x: x[1][3])
+    under = [r for _, r in named if r[2] and r is not best]
+    return "no", "; ".join([best[1]] + [r[1] for r in under]), [be[0]], rows
 
 
 def exposure(scan, ep):
@@ -315,8 +354,11 @@ def rank(context_path, cbom_path, profile="civilian", redact=()):
     ctx_doc = load_context(context_path, redact)
     horizon = ctx_doc.get("horizon", DEFAULT_HORIZON)
     source = HORIZON_SOURCE.get(profile, HORIZON_SOURCE["civilian"]) if "horizon" not in ctx_doc else "context file"
-    with open(cbom_path) as f:
-        raw = json.load(f)
+    import policy as _policy
+    try:
+        raw = _policy.load_json(cbom_path)
+    except _policy.InputError as e:
+        raise ContextError(str(e))
     marked = any(isinstance(x, dict) and x.get("name") == "fedlin:observedIn"
                  for c in (raw.get("components") or []) if isinstance(c, dict) for x in c.get("properties", []) or [])
     # one rule: a CBOM with run markers ranks only its own scan run; one from before markers (toolkit 1.1)
@@ -335,28 +377,40 @@ def rank(context_path, cbom_path, profile="civilian", redact=()):
         worst = max((SEVERITY[f["priority"]] for f in findings), default=0)
         worst_name = next((k for k, v in SEVERITY.items() if v == worst), None)
         state, why = exposure(scan, ep)
-        ctx = combine(hit)
+        ctx = combine(hit, ctx_doc)
         if not ctx:
             unmatched.append({"endpoint": ep, "worstPriority": worst_name, "exposure": state, "_w": worst})
             continue
+        per_system, decided = None, []
         if state == "exposed":
-            urgent, note = mosca(ctx, scan_year, horizon)
+            urgent, note, decided, per_system = mosca_detail(ctx, scan_year, horizon)
         else:
             urgent, note = ("not assessed" if state == "undetermined" else "no"), "; ".join(why)
         row = {k: v for k, v in ctx.items() if not k.startswith("_")}
         row.update(endpoint=ep, score=IMPACT[ctx["impact"]] * worst, worstPriority=worst_name,
                    findings=len(findings), exposure=state, exposureReasons=why if state == "exposed" else [],
-                   urgent=urgent, urgency=note, _w=worst)
+                   urgent=urgent, urgency=note, _w=worst,
+                   # combined fields above are maximums across the matched systems (horizon: the earliest);
+                   # urgency is decided per system, shown here (1.7.0)
+                   perSystem=per_system or [{"name": s, "impact": ctx["_impact"][s],
+                                             "dataLifetimeYears": e[1], "migrationYears": e[2], "horizon": e[3]}
+                                            for s, e in ((e[0], e) for e in ctx["_per"])],
+                   urgencyDecidedBy=decided)
         rows.append(row)
     rows.sort(key=lambda r: (-r["score"], -r["_w"], -IMPACT[r["impact"]], r["urgent"] != "yes", r["endpoint"]))
     unmatched.sort(key=lambda u: (-u["_w"], u["endpoint"]))
     for r in rows + unmatched:
         r.pop("_w", None)
     with_life = {s["name"] for s in ctx_doc["systems"] if "dataLifetimeYears" in s}
+    early = sorted(s["name"] for s in ctx_doc["systems"] if "horizon" not in ctx_doc
+                   and system_horizon(s, ctx_doc)[0] == HIGH_IMPACT_HORIZON)
     return {
         "resultFormat": RESULT, "resultFormatVersion": RESULT_VERSION, "profile": profile,
         "horizon": horizon, "horizonSource": source, "scanYear": scan_year,
-        "horizonBeforeScan": horizon < scan_year,
+        "horizonBeforeScan": min([horizon] + ([HIGH_IMPACT_HORIZON] if early else [])) < scan_year,
+        "highImpactHorizon": None if "horizon" in ctx_doc else HIGH_IMPACT_HORIZON,
+        "highImpactHorizonSource": None if "horizon" in ctx_doc else HIGH_IMPACT_SOURCE,
+        "systemsOnHighImpactHorizon": early,
         "endpoints": rows, "noContext": unmatched,
         "notRanked": [{"endpoint": k, "reason": v} for k, v in not_ranked.items()],
         "unusedSystems": sorted(s["name"] for s in ctx_doc["systems"] if s["name"] not in used),
@@ -380,13 +434,14 @@ def markdown(att):
              "negotiated, or classical key exchange accepted from clients without ML-KEM). It is Mosca's "
              f"inequality with a planning horizon standing in for the time to a quantum computer: the scan year "
              f"({att['scanYear']}) plus the data's confidentiality lifetime plus the migration time reaches past "
-             f"{att['horizon']} ({att['horizonSource']}). It means the data must stay confidential beyond the "
+             f"the system's horizon: {att['horizon']} ({att['horizonSource']})"
+             + (f", or {att['highImpactHorizon']} for a system of high impact or marked a high-value asset "
+                f"({att['highImpactHorizonSource']})" if att.get("highImpactHorizon") else "")
+             + ". It means the data must stay confidential beyond the "
              "date policy retires these algorithms, not that it will be decrypted then; the horizon is a policy "
              "date, not a forecast. Exposure here includes classical key exchange the server merely accepts, so "
              "it can exceed the harvest-now-decrypt-later count under Top exposures, which covers negotiated "
-             "sessions and stored material. High-value assets and high-impact systems (high-impact as defined by "
-             "NSM-10, which EO 14412 and OMB M-26-15 use) face an earlier deadline, post-quantum key establishment by 2030-12-31; set "
-             "\"horizon\": 2030 in the context file where that applies.")
+             "sessions and stored material.")
     if att.get("horizonBeforeScan"):
         L += ["", f"Note: the horizon ({att['horizon']}) is before the scan year, so every exposed endpoint is urgent."]
     L.append("")
@@ -434,7 +489,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         att = rank(a.context, a.cbom, a.profile)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as e:
         sys.stderr.write(f"[error] {e}\n")
         return 2
     if a.json:

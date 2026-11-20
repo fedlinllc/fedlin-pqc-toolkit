@@ -84,3 +84,19 @@ class ContainerLabels(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseSBOMs(unittest.TestCase):
+    """1.7.0: source SBOM named for the toolkit; an SBOM of each pushed image; checksums cover them."""
+
+    def test_workflow(self):
+        with open(os.path.join(ROOT, ".github", "workflows", "release.yml")) as f:
+            wf = f.read()
+        self.assertIn("SYFT_SOURCE_NAME: fedlin-pqc-toolkit\n", wf)
+        self.assertEqual(wf.count("format: cyclonedx-json@1.6"), 3)
+        self.assertIn("image: ${{ env.IMAGE }}@${{ steps.image.outputs.digest }}", wf)
+        self.assertIn("image: ${{ env.IMAGE }}-probe@${{ steps.probe.outputs.digest }}", wf)
+        self.assertLess(wf.index("name: SBOM of the probe image"), wf.index("name: Checksums"))
+        self.assertLess(wf.index("name: Checksums"), wf.index("name: Provenance for the release files"))
+        self.assertLess(wf.index("name: Provenance for the release files"), wf.index("name: Create the release"))
+

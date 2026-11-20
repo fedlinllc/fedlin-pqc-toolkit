@@ -52,7 +52,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.6.0"
+TOOLKIT_VERSION = "1.7.0-rc.1"
 
 
 def run(cmd, timeout=25):
@@ -185,7 +185,7 @@ def _parse_session(out):
     return proto, cipher
 
 
-_KEX_GROUPS = "X25519MLKEM768:SecP256r1MLKEM768:SecP384r1MLKEM1024:X25519:secp256r1:secp384r1"
+_KEX_GROUPS = "X25519MLKEM768:SecP256r1MLKEM768:SecP384r1MLKEM1024:X25519:secp256r1:secp384r1:MLKEM1024:MLKEM768"
 # What OpenSSL in FIPS mode will offer: no X25519-based groups.
 _KEX_GROUPS_FIPS = "SecP256r1MLKEM768:SecP384r1MLKEM1024:secp256r1:secp384r1:secp521r1"
 _PQC_HYBRIDS = ("x25519mlkem768", "secp256r1mlkem768", "secp384r1mlkem1024", "mlkem")
@@ -317,17 +317,27 @@ def _probe_kex_group(host, port=443):
     base = f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} -groups "
     out = _handshake_part(run(base + _KEX_GROUPS + " 2>&1"))
     if "SSL_CONF_cmd" not in out:
-        return _parse_kex_group(out), "host", True
+        grp = _parse_kex_group(out)
+        if not grp:     # one retry: a dropped handshake must not turn into an Incomplete verdict (1.7.0)
+            out = _handshake_part(run(base + _KEX_GROUPS + " 2>&1"))
+            grp = _parse_kex_group(out) if "SSL_CONF_cmd" not in out else None
+        return grp, "host", True
     probe = os.environ.get("FEDLIN_KEX_PROBE_OPENSSL", "")
     if probe and os.path.isfile(probe) and os.access(probe, os.X_OK):
-        pout = _handshake_part(run(f"echo | timeout 8 {shlex.quote(probe)} s_client -connect {hp} -servername {h} "
-                                   f"-groups {_KEX_GROUPS} 2>&1"))
-        grp = None if "SSL_CONF_cmd" in pout else _parse_kex_group(pout)
+        grp = None
+        for _ in range(2):      # one retry before falling back (1.7.0)
+            pout = _handshake_part(run(f"echo | timeout 8 {shlex.quote(probe)} s_client -connect {hp} "
+                                       f"-servername {h} -groups {_KEX_GROUPS} 2>&1"))
+            if "SSL_CONF_cmd" in pout:
+                break
+            grp = _parse_kex_group(pout)
+            if grp:
+                break
         if grp:
             return grp, "bundled", True
     img = os.environ.get("FEDLIN_KEX_PROBE_IMAGE", "") or _default_probe_image()
     if img:
-        grp = _probe_kex_group_container(host, port, img)
+        grp = _probe_kex_group_container(host, port, img) or _probe_kex_group_container(host, port, img)
         if grp:
             return grp, "container", True
     out = run(base + _KEX_GROUPS_FIPS + " 2>&1")
@@ -445,8 +455,12 @@ def _probe_classical_only(host, port=443):
     known = _accepted_groups("openssl", _CLASSICAL_GROUPS).split(":")
     if "X25519" in known:  # an older OpenSSL, not in FIPS mode: offer the names it has
         missing = [g for g in _CLASSICAL_GROUPS.split(":") if g not in known]
+        # A build that lacks only legacy curves (RHEL drops the binary sect* curves) still makes a complete modern
+        # offer: those names are recorded as not offered, but a rejection stays a rejection (1.7.0; before, one
+        # missing legacy name made every rejection "inconclusive").
+        complete = all(g in _ENUM_LEGACY_CURVES for g in missing)
         cmd = s_client("openssl", ":".join(known))
-        return result(_handshake_part(run(cmd + " 2>&1")), run("openssl version"), cmd, False, missing)
+        return result(_handshake_part(run(cmd + " 2>&1")), run("openssl version"), cmd, complete, missing)
     cmd = s_client("openssl", _CLASSICAL_GROUPS_FIPS)
     return result(run(cmd + " 2>&1"), run("openssl version"), cmd, False)
 
@@ -478,6 +492,14 @@ _ENUM_SIGALGS = (("RSA", "rsa_pss_rsae_sha256:rsa_pss_rsae_sha384:rsa_pss_rsae_s
                  ("ECDSA", "ecdsa_secp256r1_sha256:ecdsa_secp384r1_sha384:ecdsa_secp521r1_sha512"),
                  ("EdDSA", "ed25519:ed448"),
                  ("ML-DSA", "mldsa44:mldsa65:mldsa87"))
+# A TLS 1.3 handshake offering only the pure ML-KEM groups, with the certificate captured: an endpoint that accepts
+# nothing else (CNSA 2.0 style) completes no other enumeration handshake and was dropped from the inventory (1.7.0)
+_ENUM_PQ_ONLY = "MLKEM1024:MLKEM768:MLKEM512"
+# A TLS 1.2 handshake offering only legacy curves (those the client binary accepts, checked in the script), with
+# the certificate captured: an endpoint that accepts nothing else completed no other enumeration handshake and was
+# recorded only as "answered but refused every handshake" (1.7.0)
+_ENUM_LEGACY_CURVES = ("secp224r1", "secp224k1", "secp256k1", "secp192r1", "secp192k1", "secp160r1", "secp160k1",
+                       "secp160r2", "sect163r1", "sect193r1", "sect193r2", "sect239k1")
 _ENUM_MAX_SUITES = 40  # per protocol version; a server accepting more is recorded as truncated
 _LEGACY = "'ALL:COMPLEMENTOFALL:@SECLEVEL=0'"
 # Alerts the server sends when it refuses what was offered. Received alerts print "SSL alert number N";
@@ -527,6 +549,13 @@ def _enum_script(binary, hp, sni, pace=0.0):
         L.append(f'echo "=== CERT {label}"; out=$(echo | {o} -cipher {_LEGACY} -sigalgs {algs} 2>&1); '
                  f'printf "%s\\n" "$out" | {keep}; printf "%s\\n" "$out" | {cert}')
     L.append(f'echo "=== CERT ANY"; out=$(echo | {o} -cipher {_LEGACY} 2>&1); '
+             f'printf "%s\\n" "$out" | {keep}; printf "%s\\n" "$out" | {cert}')
+    L.append('lc=""; for g in ' + " ".join(_ENUM_LEGACY_CURVES) + '; do '
+             f'echo | timeout 3 {binary} s_client -connect 127.0.0.1:9 -groups "$g" 2>&1 | grep -q SSL_CONF_cmd '
+             '|| lc="$lc${lc:+:}$g"; done; '
+             f'if [ -n "$lc" ]; then echo "=== LEGACYCURVES"; out=$(echo | {o} -tls1_2 -cipher {_LEGACY} -groups "$lc" 2>&1); '
+             f'printf "%s\\n" "$out" | {keep}; printf "%s\\n" "$out" | {cert}; fi')
+    L.append(f'echo "=== PQONLY"; out=$(echo | {o} -tls1_3 -groups {_ENUM_PQ_ONLY} 2>&1); '
              f'printf "%s\\n" "$out" | {keep}; printf "%s\\n" "$out" | {cert}')
     if pace and pace > 0:
         gap = f"; sleep {float(pace):g}; "
@@ -599,6 +628,28 @@ def _parse_enum(out):
             else:
                 state = False if _SERVER_REFUSAL.search(t) else None
             group_states.setdefault(g, []).append(state)
+        elif k in ("PQONLY", "LEGACYCURVES"):
+            t = text(k)
+            p_, c_ = _parse_session(t)
+            if c_:
+                pq = k == "PQONLY"
+                ver = p_ or ("TLSv1.3" if pq else "TLSv1.2")
+                sess = {"protocol": ver, "cipher": c_, "group": _parse_kex_group(t)}
+                res["pq_only" if pq else "legacy_curves"] = sess
+                if res["versions"].get(ver) is not True:
+                    res["versions"][ver] = True              # a completed handshake at that version
+                    res["version_sessions"].setdefault(ver, sess)
+                # accepted, judged as configuration: only a legacy curve the offer named (a server may pick a DHE
+                # or static-RSA suite instead, which proves nothing about the curves)
+                legacy = {g.lower() for g in _ENUM_LEGACY_CURVES} | {"prime192v1"}
+                if not pq and sess["group"] and sess["group"].lower() in legacy:
+                    group_states.setdefault(sess["group"], []).append(True)
+                elif not pq:
+                    res.pop("legacy_curves", None)
+                c = _parse_cert_text(t)
+                if c and not any(x["fingerprint"] == c["fingerprint"] for x in res["certs"]):
+                    c["requested"] = "ML-KEM only" if pq else "legacy curves only"
+                    res["certs"].append(c)
         elif k.startswith("CERT "):
             c = _parse_cert_text(text(k))
             # certificate: the server presented one; refused: it sent a refusal alert; None: no answer
@@ -610,6 +661,7 @@ def _parse_enum(out):
                 "mismatch" if connected and _CERT_MISMATCH.search(text(k)) else None)
             if c:
                 c["requested"] = k.split(" ", 1)[1]
+                res.setdefault("cert_probe_keys", {})[c["requested"]] = c.get("key_alg") or "unparsed"
                 if not any(x["fingerprint"] == c["fingerprint"] for x in res["certs"]):
                     res["certs"].append(c)
     for g, states in group_states.items():
@@ -1244,6 +1296,11 @@ class CBOM:
                     # per signature-scheme family: what the certificate probe got back (none = no answer)
                     props.append({"name": "fedlin:certificateProbes", "value": ",".join(
                         f"{k}:{v or 'none'}" for k, v in en["cert_probes"].items())})
+                    # "certificate" above means the probe got one back, not that it is of that family: say which
+                    # key it had (1.7.0), e.g. ML-DSA:rsaEncryption when the server ignored the ML-DSA offer
+                    if en.get("cert_probe_keys"):
+                        props.append({"name": "fedlin:certificateProbeKeys", "value": ",".join(
+                            f"{k}:{v}" for k, v in en["cert_probe_keys"].items())})
                 if en.get("truncated"):
                     props.append({"name": "fedlin:enumerationTruncated", "value": ",".join(en["truncated"])})
                 if en.get("incomplete"):
@@ -1262,6 +1319,9 @@ class CBOM:
                 reduced = ("client OpenSSL lacks " + ",".join(co["not_offered"]) if co.get("not_offered")
                            else "FIPS-mode client: X25519 and X448 not offered")
                 props.append({"name": "fedlin:classicalOnlyOfferReduced", "value": reduced})
+            elif co.get("not_offered"):
+                # complete for every modern group; only legacy curves this client lacks were left out (1.7.0)
+                props.append({"name": "fedlin:classicalOnlyNotOffered", "value": ",".join(co["not_offered"])})
             for k, name in (("tool", "fedlin:classicalOnlyTool"), ("command", "fedlin:classicalOnlyCommand")):
                 if co.get(k):
                     props.append({"name": name, "value": co[k]})
@@ -1704,6 +1764,37 @@ def tool_available(path):
     return bool(path) and ((os.path.isfile(path) and os.access(path, os.X_OK)) or shutil.which(path) is not None)
 
 
+FAIL_ON = ("broken", "vulnerable", "transitional", "unclassified", "incomplete")
+EXIT_FAIL_ON = 3
+
+
+def _fail_on_arg(v):
+    """--fail-on value: a set of statuses; an unknown one is an argument error (exit 2)."""
+    got = {x.strip().lower() for x in str(v).split(",") if x.strip()}
+    bad = sorted(got - set(FAIL_ON))
+    if bad:
+        raise argparse.ArgumentTypeError(f"unknown status {', '.join(bad)}; use any of {', '.join(FAIL_ON)}")
+    return got
+
+
+def fail_on_hits(result, bom, wanted):
+    """{status: count} of what the scan found among the --fail-on statuses."""
+    if not wanted:
+        return {}
+    statuses = [f.get("status") for f in result.get("findings", [])]
+    hits = {}
+    for w in sorted(wanted - {"incomplete"}):
+        n = sum(1 for st in statuses if st == w or (w == "vulnerable" and st == "broken"))
+        if n:
+            hits[w] = n
+    if "incomplete" in wanted:
+        n = len(reportmod.score_summary(bom)["kex_unobserved"])
+        n += len(NOT_CAPTURED)      # answered but completed no handshake: nothing in the CBOM, still not observed
+        if n:
+            hits["incomplete"] = n
+    return hits
+
+
 def abort(msg, cleanup=()):
     """A requested source produced nothing: stop with exit code 2 (STABILITY.md), never a CBOM a CI gate reads
     as a pass. Intermediate files from this run are removed; no CBOM, policy result or report is written."""
@@ -1732,6 +1823,10 @@ def main():
     ap.add_argument("--theia", default="", help="path to cbomkit-theia (default: ../bin/cbomkit-theia)")
     ap.add_argument("--cyclonedx", default="", help="path to cyclonedx-cli (for merge + validate)")
     ap.add_argument("--validate", action="store_true", help="validate the final CBOM (needs --cyclonedx)")
+    ap.add_argument("--fail-on", default=set(), type=_fail_on_arg, metavar="STATUS[,STATUS]",
+                    help="exit 3 when the scan finds any of these (comma-separated): broken, vulnerable "
+                         "(includes broken), transitional, unclassified, incomplete (key exchange not observed on "
+                         "a TLS endpoint). For CI gates; exit 2 still means the scan itself failed")
     ap.add_argument("--redact", action="append", default=[],
                     help="old=new string replacement on the final CBOM (repeatable), e.g. corp.internal=example.gov")
     ap.add_argument("--profile", choices=list(cnsa.PROFILES), default=cnsa.DEFAULT_PROFILE,
@@ -1757,7 +1852,7 @@ def main():
                     help="CBOM of an earlier scan: with --wave, regressions at the wave's endpoints; in the "
                          "engagement kit, also the continuous-monitoring delta (<out>.delta.md)")
     ap.add_argument("--context", default="",
-                    help="business context (fedlin.pqc-context 1.0): owners, FIPS 199 impact, data lifetime and "
+                    help="business context (fedlin.pqc-context 1.0 or 1.1): owners, FIPS 199 impact, data lifetime and "
                          "migration time; adds an attention order and urgency flag to the report (implies --report)")
     ap.add_argument("--wave", default="",
                     help="wave file (fedlin.pqc-wave 1.0): after the scan, check each declared item against it "
@@ -2185,6 +2280,7 @@ def main():
           f"{result['summary']}")
     with open(args.out) as f:
         view = policymod.apply(json.load(f), result, args.out)
+    fail_hits = fail_on_hits(result, view, args.fail_on)
 
     # --- report (executive scorecard + migration roadmap) ---
     att_path = out_base + ".attestation.json"
@@ -2339,7 +2435,12 @@ def main():
         if r is None:
             sys.exit(2)
         print(r.stdout.strip() or r.stderr.strip())
-        sys.exit(r.returncode)
+        if r.returncode:
+            sys.exit(r.returncode)
+    if fail_hits:
+        print(f"[fail-on] the scan found {', '.join(f'{n} {k}' for k, n in fail_hits.items())} "
+              f"(--fail-on {','.join(sorted(args.fail_on))}): exit {EXIT_FAIL_ON}")
+        sys.exit(EXIT_FAIL_ON)
 
 
 if __name__ == "__main__":

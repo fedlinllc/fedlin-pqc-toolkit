@@ -65,6 +65,8 @@ No cluster and no source code needed.
 python3 scripts/tier2_pipeline.py --no-runtime \
   --endpoints example.com,api.example.com \
   --name example.com --report --out out/cbom.json
+# National security systems: judge against NSA CNSA 2.0 instead of the civilian default
+#   add --profile nss
 ```
 
 Outputs:
@@ -80,7 +82,12 @@ Outputs:
 The run exits `0` when it assessed something, even if only some endpoints were reachable (the report says how
 many). It exits `2`, writing nothing, on invalid arguments or when a requested source produced nothing: no
 endpoint completed a handshake, a hosts file is missing, or a tool a source needs is missing (run `./setup.sh`).
-The exit code says whether the scan ran, not what it found; see [STABILITY.md](STABILITY.md).
+By default the exit code says whether the scan ran, not what it found. For a CI gate, `--fail-on
+vulnerable,incomplete` makes a run that finds any of the listed statuses exit `3` after writing all its output
+(statuses: `broken`, `vulnerable` (which includes `broken`), `transitional`, `unclassified`, and `incomplete`
+for a TLS endpoint whose key exchange was not observed); `2` still means the scan itself failed. See
+[STABILITY.md](STABILITY.md). A key-exchange probe that gets no answer is retried once before the endpoint is
+recorded as not observed, so a dropped handshake does not by itself flip a run to Incomplete.
 
 Check that a policy result can be trusted for a CBOM (the CBOM digest matches, the result names this toolkit's ruleset, and re-evaluating the CBOM reproduces the whole result, field for field; only the evaluation date may differ): `python3 scripts/policy.py verify --cbom out/cbom.json --policy out/cbom.policy.json`. The report and the MCP server use a policy result only when it passes; otherwise they evaluate the CBOM again.
 
@@ -107,7 +114,9 @@ gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.6.0 --repo fe
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
-Each release also carries an SBOM of the toolkit (`*.sbom.cdx.json`), the provenance bundle
+Each release also carries CycloneDX SBOMs (from 1.7.0: `*.source.sbom.cdx.json` for what the source
+tree's manifests declare, and `*.image.sbom.cdx.json` for the packages actually inside each image, read from its
+pushed digest), the provenance bundle
 (`*.intoto.jsonl`) and the verdict table (`verdicts.json`). These signatures use classical algorithms,
 because Sigstore does not yet support post-quantum signatures; a post-quantum (SLH-DSA, FIPS 205)
 release ledger is planned.
@@ -173,13 +182,16 @@ how they were observed.
 
 ## Business context: attention order and urgency
 
-A context file (`fedlin.pqc-context` 1.0, [schema](schemas/context-1.0.schema.json)) says what the scanned
+A context file (`fedlin.pqc-context` 1.1, [schema](schemas/context-1.1.schema.json); 1.0 files are still read)
+says what the scanned
 endpoints are to the business. It never changes a verdict or a priority; it adds an attention order and an
 urgency flag to the report, and writes the ranking as `<out>.attention.json` (`fedlin.pqc-attention` 1.0):
 
 ```json
-{"schema": "fedlin.pqc-context", "schemaVersion": "1.0",
- "systems": [{"name": "Payments", "owner": "Payments platform", "impact": "high",
+{"schema": "fedlin.pqc-context", "schemaVersion": "1.1",
+ "systems": [{"name": "Public site", "owner": "Web team", "impact": "moderate",
+              "dataLifetimeYears": 3, "migrationYears": 1, "endpoints": ["example.com", "api.example.com"]},
+             {"name": "Payments", "owner": "Payments platform", "impact": "high", "highValueAsset": true,
               "dataLifetimeYears": 10, "migrationYears": 2, "endpoints": ["*.pay.example.gov", "10.2.0.0/16"]}]}
 ```
 
@@ -198,14 +210,18 @@ python3 scripts/context.py rank --context context.json --cbom cbom.json --json a
   to a cryptographically relevant quantum computer: urgent when the scan year plus the data's confidentiality
   lifetime plus the migration time reaches past the horizon. Urgent means the data must stay confidential
   beyond the date policy retires these algorithms, not that it will be decrypted then. The horizon is a
-  policy date, not a forecast: by default 2035 (civilian: NIST IR 8547 disallows quantum-vulnerable public-key
-  signature and key-establishment schemes after 2035, all of them deprecated after 2030; nss: the NSM-10 goal, with CNSA 2.0 setting
-  earlier dates for several categories). A context file can set its own: high-value assets and high-impact
-  systems (high-impact as defined by NSM-10, which EO 14412 and OMB M-26-15 use) must have post-quantum key
-  establishment by 2030-12-31, so set `"horizon": 2030` where that applies; the horizon is per file, so keep
-  those systems in their own context file. The toolkit does not equate FIPS 199 "high" with that definition.
+  policy date, not a forecast, and each system gets its own. From 1.7.0 a system of FIPS 199 `high` impact, or
+  one marked `"highValueAsset": true` (schema 1.1), uses 2030: NIST IR 8547 and OMB M-26-15 call for
+  post-quantum key establishment in those systems by 2030-12-31. Every other system uses 2035 (civilian: NIST
+  IR 8547 disallows quantum-vulnerable public-key signature and key-establishment schemes after 2035, all of
+  them deprecated after 2030; nss: the NSM-10 goal, with CNSA 2.0 setting earlier dates for several
+  categories). An endpoint matched by several systems is judged against each one's own horizon. A file-level
+  `"horizon"` overrides both for every system. (Before 1.7.0 every system used 2035 unless the file set a
+  horizon.)
 - Each matched system is evaluated with its own values and the most urgent result is shown, so no system
-  borrows another's migration time. A system without a migration time is checked on its data lifetime alone
+  borrows another's migration time. In `attention.json` an endpoint's impact, data lifetime and migration time
+  are maximums across its systems (possibly from different systems); `perSystem` gives each system's own values,
+  horizon and result, and `urgencyDecidedBy` names the system that decided it. A system without a migration time is checked on its data lifetime alone
   and listed (understated, never invented); one without a data lifetime is "not assessed".
 - Patterns: host glob (`*` also crosses dots), `host:port`, IP network, or IP network with port
   (`10.2.0.0/16:8443`, `[2001:db8::/32]:8443`). IP networks match endpoints scanned by address only. The
@@ -214,8 +230,17 @@ python3 scripts/context.py rank --context context.json --cbom cbom.json --json a
 
 ## Prove a migration wave
 
-A wave file (`fedlin.pqc-wave` 1.0, [schema](schemas/wave-1.0.schema.json)) states what a migration wave
-promises, per endpoint. After the work, scan again and check it:
+A wave file (`fedlin.pqc-wave` 1.1, [schema](schemas/wave-1.1.schema.json); 1.0 files are still read) states what a migration wave
+promises, per endpoint. Write one per wave, for example (the `sha256` of the scan it was planned from can be
+added under `baseline`), then after the work scan again and check it:
+
+```json
+{"schema": "fedlin.pqc-wave", "schemaVersion": "1.1", "wave": "Wave 1: public site", "profile": "civilian",
+ "items": [{"id": "w1-kex", "endpoint": "example.com", "check": "mlkem"},
+           {"id": "w1-classical", "endpoint": "example.com", "check": "refuses-classical-only"},
+           {"id": "w1-high", "endpoint": "api.example.com", "check": "findings-resolved",
+            "priorities": ["Critical", "High"], "lanes": ["key-establishment"]}]}
+```
 
 ```bash
 python3 scripts/wave.py check --wave wave.json --cbom after/cbom.json --baseline before/cbom.json
@@ -236,7 +261,9 @@ An item passes only on what this scan itself observed, and is "not observed" oth
 - what the server accepts needs a complete, untruncated enumeration (not `--no-enumerate`), and ML-KEM groups
   it accepts need the group probes to have been answered;
 - a statement about every certificate the endpoint serves needs an answer (a certificate or a refusal) from
-  the certificate probe of every signature-scheme family, recorded as `fedlin:certificateProbes`;
+  the certificate probe of every signature-scheme family, recorded as `fedlin:certificateProbes` (`certificate`
+  means the probe got a certificate back, not that it is of that family; from 1.7.0
+  `fedlin:certificateProbeKeys` names the key type each probe received);
 - a key-exchange item needs the key exchange to have been seen, and `refuses-classical-only` needs the
   classical-only probe; it fails if enumeration shows classical key exchange accepted anyway (a classical
   group offered alone, TLS 1.2 or older, or finite-field DHE).
@@ -522,12 +549,17 @@ Stated so a result is not read as more than it is:
 - An outside scan sees the endpoints it is pointed at, so coverage is always declared `partial`.
 - The server's implementing software (PKIC `implementationPurl`) cannot be known from outside and is
   declared `unknown`.
-- SSH is read from local configuration (`sshd -T`), not from a remote handshake.
+- SSH is read from local configuration (`sshd -T`), not from a remote handshake. SSH MAC algorithms and host
+  key sizes are not captured yet, so a 1024-bit RSA host key reads as RSA (planned after 1.7.0).
 - Not yet covered: IPsec/VPN, Kerberos, code signing, cloud KMS, database encryption at rest.
 - Windows AD CS template verdicts have been checked by logic inspection; a full Windows CBOM has not yet
   been run end to end through the policy stage.
 - CycloneDX 1.6 output is read as a legacy carrier by the PKIC validator; CycloneDX 2.0 export follows
   the 2.0 release.
+- A FIPS-mode scan host without the probe image cannot offer pure ML-KEM (its OpenSSL lists only the hybrid
+  groups), so it cannot observe a server that accepts only pure ML-KEM; use `fedlin-pqc-toolkit-probe`.
+- `scripts/run-cbomkit.sh` (driving a CBOMkit server over its REST API) has not been run against a live
+  CBOMkit. The supported path is to export CBOMkit's CycloneDX CBOM yourself and pass it with `--merge-cbom`.
 - The PKI Consortium CBOM profiles are working-group drafts (`pkic.example` identifiers). "Conforms" means
   the vendored validator reports CONFORMS for the entry profile at the pinned commit.
 - `setup.sh` targets Linux x86-64. Podman is needed for the probe image and cbomkit-theia; without it

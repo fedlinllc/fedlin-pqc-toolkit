@@ -73,6 +73,10 @@ def md_code(v):
     s = _CONTROL.sub("", s)
     for a, b in (("\r", " "), ("\n", " "), ("\t", " ")):
         s = s.replace(a, b)
+    # A backslash written just before the escaped pipe would make "\\|": renderers that count backslashes (markdown-it)
+    # then read the pipe as a cell separator. A word joiner (U+2060, invisible) between them keeps exactly one
+    # backslash in front of every pipe (1.7.0).
+    s = re.sub(r"\\+(?=\|)", lambda m: m.group(0) + "\u2060", s)
     return s.replace("`", "'").replace("|", "\\|")
 
 
@@ -92,8 +96,8 @@ def _inert(o):
 
 
 def load(path):
-    with open(path) as f:
-        return json.load(f)
+    import policy as _policy
+    return _policy.load_json(path)
 
 
 def props(comp):
@@ -230,7 +234,9 @@ def score_summary(bom, regime=None):
                              or (p.get("name") == "pkic:profile:keyExchange" and p.get("value") == "unparsed-kex-group")
                              for p in c.get("properties", []))]
     kex_pq = [c["name"] for c in tls
-              if any(p.get("name") == "pkic:profile:keyExchange" and "mlkem" in (p.get("value") or "").lower()
+              if any(p.get("name") == "pkic:profile:keyExchange"
+                     # pure ML-KEM is recorded as "ML-KEM-1024": compare without hyphens (1.7.0)
+                     and "mlkem" in (p.get("value") or "").lower().replace("-", "")
                      for p in c.get("properties", []))]
     return {"interfaces": len(tls), "kex_unobserved": kex_unobserved, "kex_pq": kex_pq, "score": score, "resistant": resistant, "compliant": compliant, "transitional": transitional,
             "vuln": vuln, "review": review, "scored": scored, "lanes": lanes,
@@ -460,6 +466,7 @@ def server_configuration(bom):
             items = []
         groups = [g for g in (p.get("fedlin:acceptedGroups") or "").split(",") if g and g != "none"]
         rows.append({"server": server, "status": p["fedlin:enumeration"],
+                     "kex": p.get("pkic:profile:keyExchange") or "",
                      "versions": [v for v in (p.get("fedlin:acceptedProtocolVersions") or "").split(",") if v and v != "none"],
                      "mlkem": [g for g in groups if "mlkem" in g.lower()],
                      "refused_mlkem": [g for g in (p.get("fedlin:refusedGroups") or "").split(",") if "mlkem" in g.lower()],
@@ -824,16 +831,17 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
                  "change the score. Certificates the endpoint serves, including additional ones found here, are "
                  "certificates in use and are scored.")
         L.append("")
-        L.append("| Endpoint | Protocol versions accepted | ML-KEM groups accepted | Broken items accepted | "
-                 "Quantum-vulnerable items accepted |")
-        L.append("|---|---|---|---|---|")
+        L.append("| Endpoint | Key exchange negotiated | Protocol versions accepted | ML-KEM groups accepted | "
+                 "Broken items accepted | Quantum-vulnerable items accepted |")
+        L.append("|---|---|---|---|---|---|")
         for r in conf:
+            kex = md_text(r["kex"]) if r["kex"] else "not observed"     # per endpoint (1.7.0)
             if r["status"] != "complete":
-                L.append(f"| {r['server']} | not enumerated{': ' + r['note'] if r['note'] else ''} | - | - | - |")
+                L.append(f"| {r['server']} | {kex} | not enumerated{': ' + r['note'] if r['note'] else ''} | - | - | - |")
                 continue
             na = f" (not tested: {', '.join(r['unanswered'])})" if r["unanswered"] else ""
-            L.append(f"| {r['server']} | {', '.join(r['versions']) or 'none'}{na} | {', '.join(r['mlkem']) or 'none'} | "
-                     f"{len(r['broken'])} | {len(r['vulnerable'])} |")
+            L.append(f"| {r['server']} | {kex} | {', '.join(r['versions']) or 'none'}{na} | "
+                     f"{', '.join(r['mlkem']) or 'none'} | {len(r['broken'])} | {len(r['vulnerable'])} |")
         L.append("")
         for r in conf:
             if r["broken"]:
@@ -1296,8 +1304,7 @@ def _load_view(cbom_path, policy_path="", profile=None):
     if not policy_path and os.path.exists(sibling):
         policy_path = sibling
     if policy_path:
-        with open(policy_path) as f:
-            result = json.load(f)
+        result = policymod.load_json(policy_path, "--policy", cyclonedx=False)
         c = policymod.check(result, cbom_path)
         if not c["bound"]:
             raise policymod.DigestMismatch(f"{cbom_path} does not match the digest recorded in {policy_path}")
@@ -1327,7 +1334,7 @@ def main():
     ap.add_argument("--html", default="", help="also write an HTML version (for Drive upload with clean tables)")
     ap.add_argument("--json", default="", help="optional machine-readable summary JSON")
     ap.add_argument("--context", default="",
-                    help="business context (fedlin.pqc-context 1.0): attention order and urgency in the report")
+                    help="business context (fedlin.pqc-context 1.0 or 1.1): attention order and urgency in the report")
     ap.add_argument("--self-serve", action="store_true",
                     help="automated-scan variant of the report (automated-scan disclaimer, confidence bands)")
     ap.add_argument("--brand", default="FEDLIN", help="name the report is issued under")
@@ -1375,12 +1382,16 @@ def main():
                 sys.stderr.write(f"[warn] could not verify {args.attestation_name} ({e}); emitting an UNSIGNED "
                                  "report.\n")
 
+    import policy as _policy
     try:
         bom = _load_view(args.cbom, args.policy, args.profile)
-    except Exception as e:  # includes policy.DigestMismatch
+    except _policy.DigestMismatch as e:
         sys.stderr.write(f"[error] {e}. The CBOM changed after its policy result was written; re-run the "
                          "policy stage (python3 policy.py evaluate --cbom ...) or the pipeline.\n")
         sys.exit(1)
+    except _policy.InputError as e:     # unreadable or not a CBOM: invalid input, exit 2 (1.7.0; was 1 with the
+        sys.stderr.write(f"[error] {e}\n")   # digest message above)
+        sys.exit(2)
     attention = None
     if args.context:
         import context as _context

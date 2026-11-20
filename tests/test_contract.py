@@ -52,7 +52,7 @@ CLI_FLAGS = {"--version", "--out", "--name", "--repo", "--theia-dir", "--theia-i
              "--cyclonedx", "--validate", "--redact", "--profile", "--subject-tag", "--regime", "--deep",
              "--debug-image", "--kube-cli", "--report", "--merge-cbom", "--exclude", "--no-dep-crypto",
              "--no-classical-probe", "--no-enumerate", "--enumerate-pace", "--endpoints", "--no-runtime", "--wave", "--context",
-             "--cluster", "--local-ssh"}
+             "--cluster", "--local-ssh", "--fail-on"}
 EVIDENCE_SOURCES = {  # STABILITY.md "Evidence sources": source -> (technique, confidence)
     "handshake": ("dynamic-analysis", 1.0), "probe": ("dynamic-analysis", 1.0),
     "configuration": ("other", 0.8), "file": ("other", 0.8),

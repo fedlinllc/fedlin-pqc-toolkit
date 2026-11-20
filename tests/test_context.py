@@ -296,5 +296,79 @@ class Input(Base):
         self.assertEqual(sch["properties"]["systems"]["items"]["properties"]["impact"]["enum"], list(context.IMPACT))
 
 
+class HighImpactHorizon(Base):
+    """1.7.0 (owner decision 2026-11-16): high impact or a high-value asset defaults to the 2030 horizon."""
+
+    def test_high_impact_uses_2030_and_others_2035(self):
+        # Payments (high): 2026 + 2 + 1 = 2029 is within 2035 but the high-impact horizon is 2030
+        ctx = dict(CTX, systems=[dict(CTX["systems"][0], dataLifetimeYears=2, migrationYears=3),
+                                 dict(CTX["systems"][1], dataLifetimeYears=2, migrationYears=3)])
+        att = self.ranked(ctx=ctx)
+        rows = {r["endpoint"]: r for r in att["endpoints"]}
+        self.assertEqual(rows["pay.example.gov"]["urgent"], "yes")
+        self.assertIn("past the 2030 horizon", rows["pay.example.gov"]["urgency"])
+        self.assertEqual(rows["old.example.gov"]["urgent"], "no")
+        self.assertIn("2035 horizon", rows["old.example.gov"]["urgency"])
+        self.assertEqual(rows["pay.example.gov"]["horizon"], 2030)
+        self.assertEqual(att["highImpactHorizon"], 2030)
+        self.assertEqual(att["systemsOnHighImpactHorizon"], ["Payments"])
+        self.assertIn("M-26-15", context.markdown(att))
+
+    def test_high_value_asset_needs_schema_11(self):
+        sysd = dict(CTX["systems"][1], highValueAsset=True, dataLifetimeYears=2, migrationYears=3)
+        with self.assertRaises(context.ContextError):
+            context.load_context(self.put("c10.json", dict(CTX, systems=[sysd])))
+        ctx = dict(CTX, schemaVersion="1.1", systems=[sysd])
+        rows = self.rows(ctx=ctx)
+        self.assertEqual(rows["old.example.gov"]["urgent"], "yes")
+        with self.assertRaises(context.ContextError):
+            context.load_context(self.put("c11.json", dict(ctx, systems=[dict(sysd, highValueAsset="yes")])))
+
+    def test_file_horizon_overrides_for_every_system(self):
+        ctx = dict(CTX, horizon=2035, systems=[dict(CTX["systems"][0], dataLifetimeYears=2, migrationYears=3)])
+        att = self.ranked(ctx=ctx)
+        self.assertEqual({r["endpoint"]: r for r in att["endpoints"]}["pay.example.gov"]["urgent"], "no")
+        self.assertIsNone(att["highImpactHorizon"])
+        self.assertEqual(att["systemsOnHighImpactHorizon"], [])
+
+    def test_schema_11_matches_code(self):
+        with open(os.path.join(ROOT, "schemas", "context-1.1.schema.json")) as f:
+            sch = json.load(f)
+        self.assertEqual(set(sch["properties"]["systems"]["items"]["properties"]), context.SYSTEM_KEYS_11)
+        self.assertEqual(sch["properties"]["schemaVersion"]["enum"], list(context.SCHEMA_VERSIONS))
+
+
+class PerSystemRow(Base):
+    """1.7.0: a row's combined values are maximums; perSystem shows each system's own values and result."""
+
+    def test_combined_maximums_do_not_decide(self):
+        ctx = dict(CTX, systems=[
+            {"name": "A", "impact": "low", "dataLifetimeYears": 8, "migrationYears": 0, "endpoints": ["pay.example.gov"]},
+            {"name": "B", "impact": "low", "dataLifetimeYears": 1, "migrationYears": 8, "endpoints": ["pay.example.gov"]}])
+        r = self.rows(ctx=ctx)["pay.example.gov"]
+        self.assertEqual((r["dataLifetimeYears"], r["migrationYears"]), (8, 8))   # maximums: 2026+8+8 > 2035
+        self.assertEqual(r["urgent"], "no")                                       # but no single system is
+        per = {x["name"]: x for x in r["perSystem"]}
+        self.assertEqual(set(per), {"A", "B"})
+        self.assertEqual({x["urgent"] for x in per.values()}, {"no"})
+        self.assertEqual(per["A"]["horizon"], 2035)
+        self.assertEqual(len(r["urgencyDecidedBy"]), 1)
+
+    def test_deciding_system_named(self):
+        r = self.rows()["pay.example.gov"]
+        self.assertEqual(r["urgent"], "yes")
+        self.assertEqual(r["urgencyDecidedBy"], ["Payments"])
+        per = {x["name"]: x for x in r["perSystem"]}
+        self.assertEqual((per["Payments"]["impact"], per["Payments"]["horizon"], per["Payments"]["urgent"]),
+                         ("high", 2030, "yes"))
+        self.assertEqual(per["Public site"]["horizon"], 2035)
+
+    def test_not_exposed_row_still_lists_systems(self):
+        r = self.rows()["www.example.gov"]
+        self.assertEqual(r["exposure"], "not exposed")
+        self.assertEqual([x["name"] for x in r["perSystem"]], ["Public site"])
+        self.assertEqual(r["urgencyDecidedBy"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

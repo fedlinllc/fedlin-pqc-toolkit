@@ -4,6 +4,22 @@ Every change to a verdict, a cited date or a public claim is recorded here with 
 wrong, what it is now, and the source that settled it. Verdicts come from `scripts/cnsa20_ruleset.py`;
 each rule cites a source key defined in `SOURCES` in that file.
 
+## 2026-11-19: ruleset 1.0.6 (toolkit 1.7.0; 1.3.0 pressure-test SHOULD and deferred lists)
+
+| Identifier | Was (1.0.5) | Now (1.0.6) | Source |
+|---|---|---|---|
+| A CycloneDX algorithm named without its parameter set, with the set in `algorithmProperties.parameterSetIdentifier` (`ML-KEM` + `1024`, `ML-DSA` + `65`) | Judged by the bare name: Unknown parameter set, Review | Judged as the joined name (`ML-KEM-1024`, `ML-DSA-65`), with that parameter set's verdict. Joined only when the ruleset recognises the joined name as more specific; for RSA and EC keys the field holds the key size, which is used as the size (`rsaEncryption` + `2048` stays RSA-2048, High) | FIPS203, FIPS204, FIPS205; CycloneDX 1.6 (`parameterSetIdentifier`) |
+| `secp160r1`, `secp160k1`, `secp160r2`, `sect163k1`, `sect163r1`, `sect163r2`, `sect193r1`, `sect193r2` (bare names) | Unknown (Review) | ECDH key exchange (RFC 8422 TLS groups), under 112-bit security: Critical | SP800-57 (Table 2), SP800-131A, RFC 8422 |
+| `sect233k1`, `sect233r1`, `sect239k1`, `sect283k1`, `sect283r1`, `sect409k1`, `sect409r1`, `sect571k1`, `sect571r1` (bare names) | Unknown (Review) | ECDH key exchange, quantum-vulnerable, High; binary-field curves note their deprecation in SP 800-186 (cited) | SP800-57, SP800-186, IR8547 |
+| `brainpoolP160r1`, `prime192v2`, `prime192v3` | Unknown (Review) | EC, under 112-bit security: Critical | SP800-57, SP800-131A |
+| `brainpoolP320r1`, `prime239v1`, `prime239v2`, `prime239v3` | Unknown (Review) | EC, quantum-vulnerable, High (non-NIST curves marked non-NIST) | SP800-57, IR8547 |
+| `secp192r1`, `secp192k1`, `secp224r1`, `secp224k1`, `secp256k1` (bare names) | EC public key (public-key lane); priority Critical (192) or High | ECDH key exchange (key-establishment lane) as RFC 8422 TLS groups, like the brainpool TLS groups since 1.0.4; priorities unchanged | IR8547, RFC 8422 |
+| Names that embed a legacy curve: `ecdsa_sect163k1`, `sect163k1-sha256` | `ecdsa_sect163k1`: ECDSA High (curve size unknown); `sect163k1-sha256`: SHA-256 (hash lane) | The curve's size counts: ECDSA Critical; EC Critical | SP800-57, SP800-131A |
+| LMS, HSS and LM-OTS parameter-set names (`LMS_SHA256_M32_H10`, `lms-sha256-m24-h20`, `lms_sha256`, `hss-sha256`, `HSS_LMS_SHA256`, `LMS-SHA256/192`) and `LMOTS_SHAKE_N32_W8` | SHA-256 (hash lane); `LMOTS_SHAKE_N32_W8` unknown (Review) | LMS: stateful hash-based signature, quantum-resistant, compliant (signature lane) | SP800-208, RFC 8554 |
+| XMSS / XMSS^MT parameter-set names (`XMSSMT-SHA2_20/2_256`, `xmssmt_shake_20_2_256`, `xmss-sha256`) | Unknown (Review), or SHA-256 for `xmss-sha256` | XMSS: stateful hash-based signature, quantum-resistant, compliant | SP800-208, RFC 8391 |
+
+Checked by classifying every name in the 1.0.5 and 1.0.6 verdict tables plus adversarial names under both profiles: these are all the changes. Names that contain these strings by accident (`sectigo-rsa`, `insecticide`) are unchanged.
+
 ## 2026-11-19: ruleset 1.0.5 (newcomer pressure test of v1.4.1)
 
 | Identifier | Was (1.0.4) | Now (1.0.5) | Source |

@@ -42,7 +42,8 @@ import cnsa20_ruleset as cnsa  # noqa: E402
 import evidence as evmod  # noqa: E402
 import policy  # noqa: E402
 
-SCHEMA, SCHEMA_VERSION = "fedlin.pqc-wave", "1.0"
+SCHEMA, SCHEMA_VERSION = "fedlin.pqc-wave", "1.1"
+SCHEMA_VERSIONS = ("1.0", "1.1")   # 1.1 (1.7.0): baseline may record serialNumber and timestamp
 RESULT, RESULT_VERSION = "fedlin.pqc-wave-result", "1.0"
 CHECKS = ("findings-resolved", "mlkem", "refuses-classical-only", "certificate-replaced")
 PRIORITIES = ("Critical", "High", "Low", "Review")
@@ -97,20 +98,22 @@ def load_wave(path):
     try:
         with open(path) as f:
             w = json.load(f)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:
         raise WaveError(f"{path}: {e}")
-    if not isinstance(w, dict) or w.get("schema") != SCHEMA or w.get("schemaVersion") != SCHEMA_VERSION:
-        raise WaveError(f"{path}: not a {SCHEMA} {SCHEMA_VERSION} file")
+    if not isinstance(w, dict) or w.get("schema") != SCHEMA or w.get("schemaVersion") not in SCHEMA_VERSIONS:
+        raise WaveError(f"{path}: not a {SCHEMA} {' or '.join(SCHEMA_VERSIONS)} file")
     extra = set(w) - TOP_KEYS
     if extra:
         raise WaveError(f"{path}: unknown key(s) {', '.join(sorted(extra))}")
     if w.get("profile", "civilian") not in cnsa.PROFILES:
         raise WaveError(f"{path}: unknown profile {w.get('profile')!r}")
     b = w.get("baseline")
-    if b is not None and (not isinstance(b, dict) or set(b) - {"file", "sha256"}
+    bkeys = {"file", "sha256"} | ({"serialNumber", "timestamp"} if w["schemaVersion"] == "1.1" else set())
+    if b is not None and (not isinstance(b, dict) or set(b) - bkeys
                           or not re.fullmatch(r"[0-9a-fA-F]{64}", str(b.get("sha256", "0" * 64)))
-                          or not isinstance(b.get("file", ""), str)):
-        raise WaveError(f"{path}: baseline must be an object with file and a SHA-256 sha256")
+                          or not all(isinstance(b.get(k, ""), str) for k in ("file", "serialNumber", "timestamp"))):
+        raise WaveError(f"{path}: baseline must be an object with file and a SHA-256 sha256"
+                        + (" (and optionally serialNumber and timestamp)" if w["schemaVersion"] == "1.1" else ""))
     items = w.get("items")
     if not isinstance(items, list) or not items:
         raise WaveError(f"{path}: items must be a non-empty list")
@@ -158,7 +161,7 @@ class Scan:
         try:
             with open(cbom_path) as f:
                 self.bom = json.load(f)
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, RecursionError) as e:
             raise WaveError(f"{cbom_path}: {e}")
         if not isinstance(self.bom, dict) or not isinstance(self.bom.get("components", []), list):
             raise WaveError(f"{cbom_path}: not a CycloneDX BOM")
@@ -395,7 +398,7 @@ def check_item(it, scan, profile):
         if "key-establishment" not in seen:
             return not_observed("the key exchange was not observed")
         return dict(base, status="fail", detail="negotiated " + (", ".join(kex) or "a non-ML-KEM group")
-                    + (" (nss requires ML-KEM-1024)" if profile == "nss" and any("mlkem" in v.lower() for v in kex)
+                    + (" (nss requires ML-KEM-1024)" if profile == "nss" and any("mlkem" in v.lower().replace("-", "") for v in kex)
                        else ""))
     if kind == "refuses-classical-only":
         o = p.get("fedlin:classicalOnlyOffer")
@@ -549,20 +552,41 @@ def regressions(wave, scan, before):
     return out, skipped
 
 
+def _instant(ts):
+    """A CBOM timestamp as a comparable UTC instant (offsets and fractional seconds handled); the string if it does
+    not parse, so two unparseable values still compare as before."""
+    import datetime as _dt
+    try:
+        t = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return (0, (t if t.tzinfo else t.replace(tzinfo=_dt.timezone.utc)).timestamp())
+    except ValueError:
+        return (1, str(ts))
+
+
 def check(wave_path, cbom_path, baseline_path=None):
     wave = load_wave(wave_path)
     profile = wave.get("profile", "civilian")
     scan = Scan(cbom_path, profile)
     before = Scan(baseline_path, profile, baseline=True) if baseline_path else None
-    want = str((wave.get("baseline") or {}).get("sha256", "")).lower()
+    wb = wave.get("baseline") or {}
+    want = str(wb.get("sha256", "")).lower()
     if want and want == _sha256(cbom_path):
         raise WaveError("the CBOM is the scan the wave was planned from; check against a later scan")
+    # The same scan re-serialised has other bytes but the same serial number and timestamp (1.7.0; before, only the
+    # bytes were compared, so a reformatted planning baseline was checked against itself)
+    if wb.get("serialNumber") and scan.serial == wb["serialNumber"]:
+        raise WaveError("the CBOM has the serial number of the scan the wave was planned from; check against a "
+                        "later scan")
+    if wb.get("timestamp") and scan.timestamp and _instant(scan.timestamp) <= _instant(wb["timestamp"]):
+        raise WaveError("the CBOM is not newer than the scan the wave was planned from (metadata.timestamp)")
     if before:
-        if want and want != _sha256(baseline_path):
+        same_scan = bool(wb.get("serialNumber")) and before.serial == wb["serialNumber"] \
+            and (not wb.get("timestamp") or before.timestamp == wb["timestamp"])
+        if want and want != _sha256(baseline_path) and not same_scan:
             raise WaveError(f"--baseline {baseline_path} is not the CBOM the wave was planned from (sha256 differs)")
         if not before.timestamp or not scan.timestamp:
             raise WaveError("both CBOMs need metadata.timestamp to compare them")
-        if scan.timestamp <= before.timestamp:
+        if _instant(scan.timestamp) <= _instant(before.timestamp):
             raise WaveError("the CBOM is not newer than the baseline (metadata.timestamp)")
     items = [check_item(it, scan, profile) for it in wave["items"]]
     regs, skipped = regressions(wave, scan, before) if before else (None, None)
@@ -651,7 +675,7 @@ def main(argv=None):
             return 2
     try:
         result = check(a.wave, a.cbom, a.baseline or None)
-    except (ValueError, TypeError, KeyError, AttributeError) as e:   # WaveError is a ValueError
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError) as e:   # WaveError is a ValueError
         sys.stderr.write(f"[error] {e}\n")
         return 2
     out = a.out or os.path.splitext(a.cbom)[0] + ".wave.json"

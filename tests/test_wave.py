@@ -10,6 +10,10 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 import tier2_pipeline as tp  # noqa: E402
 import wave  # noqa: E402
+try:
+    import wave_draft  # noqa: E402  (private: not in the public tree)
+except ImportError:
+    wave_draft = None
 
 OLD_FP, NEW_FP = "aa" * 32, "bb" * 32
 HOST = "svc.example.com"
@@ -232,6 +236,44 @@ class Regressions(Base):
         w = dict(WAVE, baseline={"file": "x.json", "sha256": "0" * 64})
         with self.assertRaises(wave.WaveError):
             self.run_check(after_doc(), w, before_doc())
+
+
+class BaselineIdentity(Base):
+    """1.7.0: a re-serialised planning baseline is recognised by serial number and timestamp, not only bytes."""
+
+    def wave_for(self, doc):
+        return dict(WAVE, schemaVersion="1.1", baseline={
+            "file": "before.json", "sha256": "0" * 64, "serialNumber": doc["serialNumber"],
+            "timestamp": doc["metadata"]["timestamp"]})
+
+    def test_reserialised_baseline_is_refused(self):
+        b = before_doc()
+        with self.assertRaises(wave.WaveError) as e:
+            self.run_check(json.loads(json.dumps(b, indent=4)), self.wave_for(b))
+        self.assertIn("serial number", str(e.exception))
+
+    def test_reserialised_baseline_given_as_baseline_is_accepted(self):
+        b = before_doc()
+        r, _ = self.run_check(after_doc(), self.wave_for(b), json.loads(json.dumps(b, indent=4)))
+        self.assertIn("baseline", r["documents"])
+
+    def test_draft_records_identity_and_10_still_loads(self):
+        if wave_draft is None:
+            self.skipTest("wave_draft.py is not in the public tree")
+        p = self.put("b.json", before_doc())
+        d = wave_draft.draft(p, 1)
+        self.assertEqual(d["schemaVersion"], "1.1")
+        self.assertIn("serialNumber", d["baseline"])
+        wave.load_wave(self.put("w10.json", WAVE))           # a 1.0 wave file is still read
+        with self.assertRaises(wave.WaveError):
+            wave.load_wave(self.put("w10b.json", dict(WAVE, baseline={"sha256": "0" * 64, "serialNumber": "x"})))
+
+    def test_schema_11(self):
+        with open(os.path.join(ROOT, "schemas", "wave-1.1.schema.json")) as f:
+            sch = json.load(f)
+        self.assertEqual(set(sch["properties"]["baseline"]["properties"]),
+                         {"file", "sha256", "serialNumber", "timestamp"})
+        self.assertEqual(sch["properties"]["schemaVersion"]["enum"], list(wave.SCHEMA_VERSIONS))
 
 
 class Round2(Base):
