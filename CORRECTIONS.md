@@ -4,6 +4,14 @@ Every change to a verdict, a cited date or a public claim is recorded here with 
 wrong, what it is now, and the source that settled it. Verdicts come from `scripts/cnsa20_ruleset.py`;
 each rule cites a source key defined in `SOURCES` in that file.
 
+## 2026-11-20: ruleset 1.0.7 (NSA CNSA 2.0 FAQ, read in full)
+
+| Identifier | Was (1.0.6) | Now (1.0.7) | Source |
+|---|---|---|---|
+| HSS (`HSS`, `HSS/LMS`, `LMS/HSS`, `HSS_LMS_SHA256`, `hss-sha256`, `hss-lms-signature`, `id-alg-hss-lms-hashsig`) and XMSS^MT (`XMSSMT`, `XMSS-MT`, `XMSS^MT`, `XMSSMT-SHA2_20/2_256`, `XMSS-MT-SHA2_20/2_256`, `XMSS_MT_...`) under `--profile nss` | Read as LMS / XMSS: compliant (CNSA 2.0) | Quantum-resistant but not CNSA 2.0: Low, target single-tree LMS or XMSS. Civilian unchanged (compliant, SP 800-208). The canonical names are now `hss` and `xmssmt`. Standards also use the HSS/LMS framing (and `id-alg-hss-lms-hashsig`) for a single level (L=1), which is single-tree LMS; the name does not show the level count, so the verdict's note says to confirm it | CNSA2-FAQ (NSA, U/OO/194427-22, Ver. 2.0, April 2024, p. 5: "The multitree algorithms HSS and XMSSMT are not allowed"), SP800-208 |
+
+The error dates from before 1.0.5 (the `hss` and `xmssmt` aliases); 1.0.6 extended it to more spellings.
+
 ## 2026-11-19: ruleset 1.0.6 (toolkit 1.7.0; 1.3.0 pressure-test SHOULD and deferred lists)
 
 | Identifier | Was (1.0.5) | Now (1.0.6) | Source |

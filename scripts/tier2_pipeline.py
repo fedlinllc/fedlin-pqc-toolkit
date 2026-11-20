@@ -52,7 +52,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.7.0"
+TOOLKIT_VERSION = "1.8.0-rc.1"
 
 
 def run(cmd, timeout=25):
@@ -1055,12 +1055,42 @@ def capture_ssh():
             if ln.lower().startswith(prefix):
                 return ln.split(None, 1)[1] if len(ln.split(None, 1)) > 1 else ""
         return ""
+    # Host key sizes (1.8.0): sshd -T lists each HostKey path; the public half (<path>.pub) gives the type and size.
+    # Only the .pub file is read, never the private key.
+    sizes = []
+    for ln in t.splitlines():
+        parts = ln.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == "hostkey":
+            got = _ssh_key_size(run(f"ssh-keygen -l -f {shlex.quote(parts[1].strip() + '.pub')} 2>/dev/null"))
+            if got:
+                sizes.append(dict(got, file=parts[1].strip() + ".pub"))
     return {
         "version": ver,
         "kex": [x for x in line("kexalgorithms").split(",") if x],
         "ciphers": [x for x in line("ciphers").split(",") if x],
+        "macs": [x for x in line("macs").split(",") if x],
         "hostkeys": [x for x in line("hostkeyalgorithms").split(",") if x],
+        "hostkey_sizes": sizes,
     }
+
+
+# ssh-keygen -l key types -> the name the ruleset judges (the key itself, not a signature scheme: "ssh-rsa" would
+# read as an RSA signature with SHA-1)
+_SSH_KEY_NAMES = {"RSA": "rsaEncryption", "DSA": "ssh-dss", "ED25519": "ssh-ed25519", "ED448": "ssh-ed448",
+                  "ED25519-SK": "ssh-ed25519", "ECDSA-SK": "ecdsa-sha2-nistp256"}
+
+
+def _ssh_key_size(out):
+    """{"type", "bits", "name"} from `ssh-keygen -l` output ("3072 SHA256:... comment (RSA)"), or None."""
+    m = re.match(r"^\s*(\d+)\s+\S+.*\(([A-Z0-9-]+)\)\s*$", (out or "").strip().splitlines()[0] if out else "")
+    if not m:
+        return None
+    bits, typ = int(m.group(1)), m.group(2)
+    if typ == "ECDSA":
+        name = {256: "ecdsa-sha2-nistp256", 384: "ecdsa-sha2-nistp384", 521: "ecdsa-sha2-nistp521"}.get(bits)
+    else:
+        name = _SSH_KEY_NAMES.get(typ)
+    return {"type": typ, "bits": bits, "name": name or f"unparsed-public-key-algorithm ({typ})"}
 
 
 # ---------- build CycloneDX 1.6 ----------
@@ -1339,10 +1369,13 @@ class CBOM:
 
     def add_ssh(self, ssh):
         algos = []
-        for a in ssh.get("kex", []) + ssh.get("hostkeys", []) + ssh.get("ciphers", []):
+        for a in ssh.get("kex", []) + ssh.get("hostkeys", []) + ssh.get("ciphers", []) + ssh.get("macs", []):
             if cnsa.is_pseudo(a):  # protocol markers such as ext-info-c, kex-strict-*
                 continue
             algos.append(self.algo_ref(a, None, "configuration"))
+        for k in ssh.get("hostkey_sizes", []):    # the host keys themselves, with their sizes (1.8.0)
+            bits = k["bits"] if k["type"] in ("RSA", "DSA") else None
+            algos.append(self.algo_ref(k["name"], bits, "configuration", k.get("file")))
         ref = "crypto/proto/ssh"
         # Configuration evidence (sshd -T on this host), not an observed interface: one PKIC document
         # carries one lifecycle stage, and the TLS interfaces are observed. A remote SSH handshake scan

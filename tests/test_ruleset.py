@@ -287,10 +287,44 @@ class HashBasedSignatureNames106(unittest.TestCase):
     """Ruleset 1.0.6: SP 800-208 parameter-set names are LMS / XMSS signatures, not their hash."""
 
     def test_names(self):
-        for n in ("LMS_SHA256_M32_H10", "lms-sha256-m24-h20", "LMOTS_SHA256_N32_W8", "LMOTS_SHAKE_N32_W4", "HSS_SHA256"):
+        for n in ("LMS_SHA256_M32_H10", "lms-sha256-m24-h20", "LMOTS_SHA256_N32_W8", "LMOTS_SHAKE_N32_W4"):
             v = r.classify(n)
             self.assertEqual((v["canonical"], v["lane"]), ("lms", "signature"), n)
             self.assertFalse(v["quantum_vulnerable"], n)
-        self.assertEqual(r.classify("XMSSMT-SHA2_20/2_256")["canonical"], "xmss")
+        self.assertEqual(r.classify("XMSSMT-SHA2_20/2_256")["canonical"], "xmssmt")     # 1.0.7: its own entry
         self.assertEqual(r.classify("SHA-256")["canonical"], "sha-256")       # a plain hash is still a hash
         self.assertIsNone(r.classify("films")["canonical"])
+
+
+class MultitreeNotCNSA107(unittest.TestCase):
+    """Ruleset 1.0.7: NSA CNSA 2.0 FAQ (Ver. 2.0, April 2024, p. 5): "The multitree algorithms HSS and XMSSMT are not
+    allowed" in NSS. Compliant under civilian (SP 800-208); quantum-resistant but not CNSA 2.0 under nss."""
+
+    def test_verdicts(self):
+        for n in ("HSS", "HSS/LMS", "HSS_LMS_SHA256", "hss-sha256", "XMSSMT", "XMSSMT-SHA2_20/2_256"):
+            civ, nss = r.classify(n, profile="civilian"), r.classify(n, profile="nss")
+            self.assertEqual(civ["priority"], "None", n)
+            self.assertEqual(nss["priority"], "Low", n)
+            self.assertFalse(nss["quantum_vulnerable"], n)
+            self.assertIn("CNSA2-FAQ", nss["cite"], n)
+        for n in ("LMS", "LMS_SHA256_M24_H10", "XMSS", "XMSS-SHA2_10_256"):      # single-tree: still CNSA 2.0
+            self.assertEqual(r.classify(n, profile="nss")["priority"], "None", n)
+
+
+
+class MultitreeSpellings107(unittest.TestCase):
+    """Review of 1.8.0: every spelling of HSS and XMSS^MT is the multitree entry; single-tree names are unchanged."""
+
+    def test_spellings(self):
+        for n in ("XMSS-MT-SHA2_20/2_256", "XMSS_MT_SHA2_20_2_256", "XMSS^MT signature", "xmss-mt signature",
+                  "XMSS-MT", "xmss_mt"):
+            self.assertEqual(r.classify(n, profile="nss")["canonical"], "xmssmt", n)
+        for n in ("hss-lms-signature", "HSS_LMS signature", "id-alg-hss-lms-hashsig", "LMS/HSS", "HSS-LMS"):
+            self.assertEqual(r.classify(n, profile="nss")["canonical"], "hss", n)
+        for n, want in (("LMS-SHA256/192", "lms"), ("lms-sha256-m32-h10", "lms"), ("XMSS-SHA2_10_256", "xmss"),
+                        ("xmss-sha256", "xmss"), ("LMOTS_SHA256_N32_W8", "lms")):
+            v = r.classify(n, profile="nss")
+            self.assertEqual((v["canonical"], v["priority"]), (want, "None"), n)
+        for n in ("chss", "xmssmtx"):
+            self.assertIsNone(r.classify(n)["canonical"], n)
+        self.assertIn("L=1", r.classify("HSS")["note"])

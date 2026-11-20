@@ -244,5 +244,58 @@ class Report(unittest.TestCase):
                          sum(1 for c in doc["components"] if c["type"] == "cryptographic-asset"))
 
 
+
+class SshMacsAndHostKeys180(unittest.TestCase):
+    """1.8.0 (#632): SSH MACs and host key sizes are captured from sshd -T and the host keys' .pub files."""
+
+    def test_capture_and_verdicts(self):
+        import tempfile as _tf
+        from unittest import mock
+        sshd = ("kexalgorithms mlkem768x25519-sha256,curve25519-sha256\nciphers aes256-gcm@openssh.com\n"
+                "macs hmac-sha2-256-etm@openssh.com,hmac-md5\nhostkeyalgorithms rsa-sha2-512,ssh-ed25519\n"
+                "hostkey /etc/ssh/ssh_host_rsa_key\nhostkey /etc/ssh/ssh_host_ed25519_key\n"
+                "hostkey /etc/ssh/ssh_host_ecdsa_key\n")
+        keygen = {"/etc/ssh/ssh_host_rsa_key.pub": "1024 SHA256:abc root@h (RSA)",
+                  "/etc/ssh/ssh_host_ed25519_key.pub": "256 SHA256:def root@h (ED25519)",
+                  "/etc/ssh/ssh_host_ecdsa_key.pub": "384 SHA256:ghi root@h (ECDSA)"}
+        seen = []
+
+        def fake(cmd, *a, **k):
+            seen.append(cmd)
+            if "sshd -T" in cmd:
+                return sshd
+            if cmd.startswith("ssh -V"):
+                return "OpenSSH_9.9p1"
+            for path, out in keygen.items():
+                if path in cmd:
+                    return out
+            return ""
+        with mock.patch.object(tp, "run", side_effect=fake):
+            ssh = tp.capture_ssh()
+        self.assertEqual(ssh["macs"], ["hmac-sha2-256-etm@openssh.com", "hmac-md5"])
+        self.assertEqual([(k["name"], k["bits"]) for k in ssh["hostkey_sizes"]],
+                         [("rsaEncryption", 1024), ("ssh-ed25519", 256), ("ecdsa-sha2-nistp384", 384)])
+        self.assertFalse(any("ssh-keygen" in c and not c.split("-f ", 1)[1].split()[0].strip("'").endswith(".pub")
+                             for c in seen))                      # never the private key
+        b = tp.CBOM("ssh", "1", {})
+        b.add_ssh(ssh)
+        with _tf.TemporaryDirectory() as d:
+            p = os.path.join(d, "c.json")
+            with open(p, "w") as f:
+                json.dump(b.to_dict(), f)
+            import policy
+            fs = {(x["name"], x.get("canonical")): x for x in policy.evaluate(p)["findings"]}
+        prio = {k[0]: v["priority"] for k, v in fs.items()}
+        self.assertEqual(prio["rsaEncryption"], "Critical")          # 1024-bit RSA host key
+        self.assertEqual(prio["hmac-md5"], "Critical")
+        self.assertIn("ecdsa-sha2-nistp384", prio)
+
+    def test_keygen_parse(self):
+        self.assertIsNone(tp._ssh_key_size(""))
+        self.assertIsNone(tp._ssh_key_size("not a key"))
+        self.assertEqual(tp._ssh_key_size("3072 SHA256:x a b (RSA)")["bits"], 3072)
+        self.assertEqual(tp._ssh_key_size("4096 SHA256:x (XYZ)")["name"], "unparsed-public-key-algorithm (XYZ)")
+
+
 if __name__ == "__main__":
     unittest.main()

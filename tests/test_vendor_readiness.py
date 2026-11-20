@@ -542,3 +542,135 @@ class Fixes160(unittest.TestCase):
         md = vr.report_md(res)
         if not res["concerns"]:
             self.assertIn("contradictions above are listed separately", md)
+
+
+class CnsaDates180(unittest.TestCase):
+    """1.8.0 (#624): under --profile nss, dates are judged against the CNSA 2.0 date for the product's category
+    (NSA CNSA 2.0 FAQ, Ver. 2.0, April 2024, p. 10)."""
+
+    def run_case(self, answers, profile):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "a.json")
+            with open(p, "w") as f:
+                json.dump(answers, f)
+            return vr.assess(p, profile)
+
+    T1 = {"T1": {"answer": "x", "claims": {"pqc_ready_date": "2032-06"}}}
+
+    def test_category_sets_the_date(self):
+        res = self.run_case({"cnsa_category": "operating-system", "answers": dict(self.T1)}, "nss")
+        self.assertEqual(res["results"]["T1"]["status"], "planned")
+        self.assertIn("2033", res["results"]["T1"]["detail"])
+        self.assertEqual(vr.summary(res)["deadline"]["date"], "2033-12-31")
+        res = self.run_case({"cnsa_category": "networking", "answers": dict(self.T1)}, "nss")
+        self.assertEqual(res["results"]["T1"]["status"], "late")
+        self.assertIn("traditional networking", res["results"]["T1"]["detail"])
+
+    def test_no_category_uses_earliest_and_says_so(self):
+        res = self.run_case({"answers": dict(self.T1)}, "nss")
+        self.assertEqual(res["results"]["T1"]["status"], "late")
+        self.assertIn("set cnsa_category", res["results"]["T1"]["detail"])
+        self.assertIn("set cnsa_category", vr.report_md(res))
+
+    def test_civilian_unchanged(self):
+        res = self.run_case({"cnsa_category": "operating-system", "answers": dict(self.T1)}, "civilian")
+        self.assertEqual(res["results"]["T1"]["status"], "late")
+        self.assertEqual(vr.summary(res)["deadline"]["date"], "2030-12-31")
+
+    def test_bad_category_is_input_error(self):
+        for bad in ("os", ["web-cloud"], 7):
+            with self.assertRaises(vr.VendorInputError):
+                self.run_case({"cnsa_category": bad, "answers": {}}, "nss")
+
+    def test_template_and_categories(self):
+        self.assertIn("cnsa_category", vr.template(vr.load_questions()))
+        self.assertEqual({y for y, _ in vr.CNSA_CATEGORIES.values()}, {2030, 2033})
+
+
+class Rollup180(unittest.TestCase):
+    """1.8.0 (#624): vendors side by side from their summaries; facts only, no score."""
+
+    def summaries(self, d, *specs):
+        paths = []
+        for i, (vendor, statuses, extra) in enumerate(specs):
+            sm = {"vendor": vendor, "product": "P", "version": "1", "profile": "civilian", "answered": 31,
+                  "questions": 31, "checks": {}, "statuses": statuses, "concerns": [], "cbom": True,
+                  "cbom_coverage": "complete", "ruleset_version": "1.0.7",
+                  "contradicted": sorted(k for k, v in statuses.items() if v == "contradicted")}
+            sm.update(extra)
+            p = os.path.join(d, f"v{i}.summary.json")
+            with open(p, "w") as f:
+                json.dump(sm, f)
+            paths.append(p)
+        return paths
+
+    def test_order_and_no_score(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.summaries(d, ("Calm", {"A1": "consistent"}, {}),
+                           ("Late", {"T1": "late"}, {}),
+                           ("Contra", {"A1": "contradicted", "T3": "contradicted"}, {}),
+                           ("Gap", {"A1": "not-evidenced"}, {}))
+            ru = vr.rollup([d])
+            self.assertEqual([r["vendor"] for r in ru["vendors"]], ["Contra", "Late", "Gap", "Calm"])
+            md = vr.rollup_md(ru)
+            self.assertNotIn("score", json.dumps(ru).lower())
+            self.assertIn("Not a ranking or a determination", md)
+            self.assertIn("| Contra | P 1 | 2: A1, T3 |", md)
+
+    def test_mixed_profiles_noted_and_names_inert(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.summaries(d, ("A|B\nC", {"A1": "consistent"}, {}), ("N", {"A1": "consistent"}, {"profile": "nss"}))
+            ru = vr.rollup([d])
+            self.assertTrue(any("different profiles" in n for n in ru["notes"]))
+            md = vr.rollup_md(ru)
+            self.assertIn("A\\|B C", md)
+            self.assertNotIn("A|B", md)
+
+    def test_bad_input_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "r.md")
+            self.assertEqual(vr.main(["rollup", "--summaries", d, "--out", out]), 2)          # nothing there
+            bad = os.path.join(d, "x.summary.json")
+            with open(bad, "w") as f:
+                json.dump({"vendor": "x"}, f)
+            self.assertEqual(vr.main(["rollup", "--summaries", bad, "--out", out]), 2)       # not a summary
+            self.summaries(d, ("Ok", {"A1": "consistent"}, {}))
+            os.remove(bad)
+            self.assertEqual(vr.main(["rollup", "--summaries", d, "--out", out]), 0)
+            self.assertTrue(os.path.exists(os.path.join(d, "r.json")))
+
+
+class RollupHardening180(unittest.TestCase):
+    """Review of 1.8.0: odd summaries are input errors, not tracebacks; nothing from a summary is raw Markdown."""
+
+    def write(self, d, name, sm):
+        p = os.path.join(d, name)
+        with open(p, "w") as f:
+            json.dump(sm, f)
+        return p
+
+    def base(self, **kw):
+        sm = {"vendor": "V", "statuses": {"A1": "consistent"}, "contradicted": [], "concerns": [],
+              "questions": 31, "answered": 31, "profile": "civilian"}
+        sm.update(kw)
+        return sm
+
+    def test_odd_summaries_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "r.md")
+            for i, bad in enumerate(({"deadline": "2030"}, {"statuses": {"A1": {"x": 1}}}, {"statuses": {"": "x"}},
+                                     {"statuses": {"L²": "x"}}, {"contradicted": ["L1", 2]},
+                                     {"contradicted": 5}, {"concerns": 7}, {"contradicted": "L1"})):
+                p = self.write(d, f"b{i}.summary.json", self.base(**bad))
+                self.assertEqual(vr.main(["rollup", "--summaries", p, "--out", out]), 2, bad)
+
+    def test_notes_escaped_paths_and_duplicates(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self.write(d, "a.summary.json", self.base(profile="nss\n\n# Injected heading"))
+            self.write(d, "b.summary.json", self.base(vendor="W"))
+            ru = vr.rollup([d, a])                       # a given twice: once
+            self.assertEqual(len(ru["vendors"]), 2)
+            self.assertNotIn("\n# Injected", vr.rollup_md(ru))
+            self.assertEqual(vr.main(["rollup", "--summaries", d, "--out", os.path.join(d, "x.json")]), 2)
+            self.assertEqual(vr.main(["rollup", "--summaries", d, "--out", os.path.join(d, "v.md")]), 0)
+            self.assertTrue(os.path.exists(os.path.join(d, "v.json")))

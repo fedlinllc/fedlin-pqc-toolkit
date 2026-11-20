@@ -275,7 +275,8 @@ def evidence(F):
         # The vendor-readiness disclosure checks, run against this CBOM (1.5.2: before, only A1 was compared and
         # its gap cited certificate algorithms, so four contradictions could read "No gap").
         facts = vr.cbom_facts(F.bom, F.profile)
-        ctx = {"profile": F.profile, "pkic": None, "cmvp": F.cmvp}
+        dl, dl_text = vr.deadline_for(F.profile, F.answers or {})
+        ctx = {"profile": F.profile, "pkic": None, "cmvp": F.cmvp, "deadline": dl, "deadline_text": dl_text}
         doc = vr.load_questions()
         res = {q["id"]: vr.run_check(q, A.get(q["id"]) or {}, facts, ctx) for q in doc["questions"]
                if q.get("check") and q["check"] != "dated"}

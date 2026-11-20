@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.6"
+RULESET_VERSION = "1.0.7"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -48,6 +48,9 @@ SOURCES = {
                "move key establishment to PQC by 2030-12-31 and signatures by 2031-12-31",
     "CNSA2": "NSA Commercial National Security Algorithm Suite 2.0 (ML-KEM-1024, ML-DSA-87, LMS/XMSS, "
              "AES-256, SHA-384/512)",
+    "CNSA2-FAQ": "NSA, The Commercial National Security Algorithm Suite 2.0 and Quantum Computing FAQ, "
+                 "U/OO/194427-22, Ver. 2.0, April 2024: from SP 800-208 only LMS and XMSS are approved for NSS; "
+                 "\"the multitree algorithms HSS and XMSSMT are not allowed\" (p. 5)",
     "SP800-57": "NIST SP 800-57 Part 1 Rev. 5, Table 2 (comparable security strengths)",
     "SP800-186": "NIST SP 800-186, Recommendations for Discrete Logarithm-based Cryptography: Elliptic Curve "
                  "Domain Parameters (Feb 2023): binary-field curves deprecated",
@@ -316,6 +319,20 @@ ALGORITHMS = {
                note="Stateful hash-based signature (SP 800-208). CNSA 2.0 approves LMS and XMSS for software and "
                     "firmware signing only. State management is a deployment risk.",
                target={"civilian": "None (SP 800-208)", "nss": "None (CNSA 2.0 firmware/code signing)"}),
+    # The multitree variants (1.0.7): SP 800-208 approves them, CNSA 2.0 does not ("HSS and XMSSMT are not allowed",
+    # NSA CNSA 2.0 FAQ, April 2024). Before 1.0.7 they were read as LMS / XMSS, compliant under nss.
+    "hss": _a("pqc", "signature", _SIG_FN, level=5, compliant=_CIV, family="LMS",
+              controls=["SC-13", "SC-17"], cite=["SP800-208", "CNSA2", "CNSA2-FAQ"],
+              note="HSS, the multitree form of LMS (SP 800-208). Quantum-resistant; not allowed in NSS (CNSA 2.0 "
+                   "approves single-tree LMS and XMSS only). Standards also use the HSS/LMS framing for a single "
+                   "level (L=1), which is single-tree LMS: the name alone does not show the level count, so "
+                   "confirm it before acting on the NSS verdict. State management is a deployment risk.",
+              target={"civilian": "None (SP 800-208)", "nss": "Single-tree LMS or XMSS (CNSA 2.0 firmware/code signing)"}),
+    "xmssmt": _a("pqc", "signature", _SIG_FN, level=5, compliant=_CIV, family="XMSS",
+                 controls=["SC-13", "SC-17"], cite=["SP800-208", "CNSA2", "CNSA2-FAQ"],
+                 note="XMSS^MT, the multitree form of XMSS (SP 800-208). Quantum-resistant; not allowed in NSS "
+                      "(CNSA 2.0 approves single-tree LMS and XMSS only). State management is a deployment risk.",
+                 target={"civilian": "None (SP 800-208)", "nss": "Single-tree LMS or XMSS (CNSA 2.0 firmware/code signing)"}),
     "fn-dsa": _a("pqc", "signature", _SIG_FN, compliant=_NONE, family="FN-DSA", standard="pre-standard",
                  controls=["SC-13", "SC-17"], cite=["FN-DSA", "CNSA2"],
                  note="FN-DSA (FALCON) is quantum-resistant but its NIST standard is not final.",
@@ -535,7 +552,7 @@ _ALIAS_RAW = {
     "dilithium2": "dilithium", "dilithium3": "dilithium", "dilithium5": "dilithium", "dilithium": "dilithium",
     "slh-dsa": "slh-dsa", "slhdsa": "slh-dsa",
     "sphincs+": "sphincs+", "sphincsplus": "sphincs+", "sphincs": "sphincs+",
-    "lms": "lms", "hss": "lms", "hss/lms": "lms", "xmss": "xmss", "xmssmt": "xmss",
+    "lms": "lms", "hss": "hss", "hss/lms": "hss", "hsslms": "hss", "xmss": "xmss", "xmssmt": "xmssmt",
     "falcon": "fn-dsa", "fn-dsa": "fn-dsa", "fndsa": "fn-dsa", "falcon512": "fn-dsa", "falcon1024": "fn-dsa",
     "fn-dsa-512": "fn-dsa", "fn-dsa-1024": "fn-dsa",
     # Quantum-vulnerable public key (OpenSSL names)
@@ -781,13 +798,21 @@ def normalize(name, bits=None):
 
     toks = _tokens(low)
 
+    # 3a. Multitree hash-based signatures in any spelling (XMSS-MT-SHA2_20/2_256, XMSS^MT signature,
+    # id-alg-hss-lms-hashsig, LMS/HSS). Checked before the single-tree forms so a separator or suffix cannot turn
+    # them into LMS / XMSS (which CNSA 2.0 approves and they are not).
+    if re.search(r"(?<![a-z0-9])xmss[-_ ^]?mt(?![a-z])", low):
+        return [("xmssmt", None, raw)], None
+    if re.search(r"(?<![a-z0-9])hss(?![a-z0-9])", low) and (low.startswith("hss") or "lms" in low):
+        return [("hss", None, raw)], None
+
     # 3b. LMS / HSS / LM-OTS parameter-set names (RFC 8554, SP 800-208: LMS_SHA256_M32_H10, lms-sha256-m24-h20,
     # LMOTS_SHAKE_N32_W8). Before 1.0.6 the hash token won and they read as SHA-256 (hash lane).
     if re.match(r"^(?:hss[-_ ]?)?(?:lms|lmots|lm-ots|hss)[-_ ]?(?:sha-?256|shake(?:256)?)(?:[-_/ ]|$)", low):
-        return [("lms", None, raw)], None
+        return [("hss" if low.startswith("hss") else "lms", None, raw)], None
     # XMSS / XMSS^MT parameter-set names (RFC 8391, SP 800-208: XMSS-SHA2_10_256, XMSSMT-SHA2_20/2_256)
     if re.match(r"^xmss(?:mt|\^mt)?[-_ ]?(?:sha-?2|shake)", low):
-        return [("xmss", None, raw)], None
+        return [("xmssmt" if re.match(r"^xmss(?:mt|\^mt)", low) else "xmss", None, raw)], None
 
     # 4. Explicit PQC parameter sets inside longer names. The parameter set must end there: "mlkem10240" is not
     # ML-KEM-1024. A name marked as the 2023 initial public draft ("-ipd") is that draft, not the standard.

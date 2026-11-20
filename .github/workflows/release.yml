@@ -145,7 +145,35 @@ jobs:
           output-file: dist/fedlin-pqc-toolkit-probe-${{ steps.v.outputs.version }}.image.sbom.cdx.json
           upload-artifact: false
           upload-release-assets: false
-      # checksums and provenance cover every release file, the image SBOMs included
+      # Red Hat preflight of the certified image, on every release tag (the tag push is the event; nothing is
+      # scheduled). A failure stops the release before it is published. Results are a release file. Submission to
+      # Red Hat is not done here: it needs the certification component and the Pyxis key, which stay in the
+      # cluster (fedlin-vision k8s/ocp-ops/pqc-toolkit-preflight-submit.yaml) (1.8.0, #625).
+      - name: Red Hat preflight of the certified image
+        env:
+          VER: ${{ steps.v.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PREFLIGHT_URL: https://github.com/redhat-openshift-ecosystem/openshift-preflight/releases/download/1.22.0/preflight-linux-amd64
+          PREFLIGHT_SHA256: 1451ed8763f209f4d4a63848d9d62d1d40653a247db43d7606feb28eadbbd99b
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/preflight" "$PREFLIGHT_URL"
+          echo "$PREFLIGHT_SHA256  $RUNNER_TEMP/preflight" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/preflight"
+          export PFLT_ARTIFACTS="$RUNNER_TEMP/pflt" PFLT_LOGFILE="$RUNNER_TEMP/pflt.log"
+          # the login above wrote ~/.docker/config.json; pass it so a private package would also be readable
+          "$RUNNER_TEMP/preflight" check container "$IMAGE@$DIGEST" --docker-config "$HOME/.docker/config.json" \
+            > "dist/fedlin-pqc-toolkit-$VER.preflight.json"
+          python3 - "dist/fedlin-pqc-toolkit-$VER.preflight.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          res = r.get("results", {})
+          print(f"preflight passed={r.get('passed')}: {len(res.get('passed', []))} passed, "
+                f"{len(res.get('failed', []))} failed, {len(res.get('errors', []))} errors")
+          for x in res.get("failed", []) + res.get("errors", []):
+              print("::error::preflight " + str(x.get("name")) + ": " + str(x.get("help") or x.get("description")))
+          sys.exit(0 if r.get("passed") is True else 1)
+          PY
+      # checksums and provenance cover every release file, the image SBOMs and preflight results included
       - name: Checksums
         run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
       - name: Provenance for the release files

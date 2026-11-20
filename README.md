@@ -116,7 +116,8 @@ sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 
 Each release also carries CycloneDX SBOMs (from 1.7.0: `*.source.sbom.cdx.json` for what the source
 tree's manifests declare, and `*.image.sbom.cdx.json` for the packages actually inside each image, read from its
-pushed digest), the provenance bundle
+pushed digest), from 1.8.0 the Red Hat preflight results for the certified image (`*.preflight.json`; a release
+whose image fails preflight is not published), the provenance bundle
 (`*.intoto.jsonl`) and the verdict table (`verdicts.json`). These signatures use classical algorithms,
 because Sigstore does not yet support post-quantum signatures; a post-quantum (SLH-DSA, FIPS 205)
 release ledger is planned.
@@ -452,7 +453,14 @@ vendor's own CBOM, flagging any it contradicts or cannot show. It is a review ai
 python3 scripts/vendor_readiness.py questionnaire --out vendor-questions.md   # send to the vendor
 python3 scripts/vendor_readiness.py template --out answers.json               # fill in answers and claims
 python3 scripts/vendor_readiness.py assess --answers answers.json             # report + summary JSON
+python3 scripts/vendor_readiness.py rollup --summaries out/ --out vendors.md   # every vendor side by side
 ```
+
+`rollup` reads the `*.summary.json` that `assess` wrote for each vendor and lists the vendors side by side:
+contradictions, late, implausible and missing dates, claims the CBOM cannot show, concerns, and each checked
+question's status, ordered by what needs a question first. It gives no combined score and is not a ranking; it
+notes when vendors were assessed under different profiles, rulesets or deadlines, and records each summary's
+SHA-256 (`vendors.json` beside the report).
 
 Each question is typed. **Disclosure** answers (inventory, third-party cryptography, data flows and
 authentication on traditional asymmetric cryptography, hybrid use, PQC algorithms, library validation) are
@@ -473,8 +481,15 @@ How a comparison with the CBOM reads:
 
 Stated dates are reported apart from these, as `planned` (also I1 when `ga_date` is in the future and the
 algorithms are not in today's CBOM yet), `past` (ask for evidence it happened), `implausible`
-(before FIPS 203/204/205 were published), `late` (after 2030) or `missing-date` (absent or not a date; dates may
-be YYYY-MM-DD, YYYY-MM, YYYY, an ISO date-time or a quarter such as Q3 2027).
+(before FIPS 203/204/205 were published), `late` (after the deadline) or `missing-date` (absent or not a date;
+dates may be YYYY-MM-DD, YYYY-MM, YYYY, an ISO date-time or a quarter such as Q3 2027).
+
+The deadline is the end of 2030 under `--profile civilian`. Under `--profile nss` it is the CNSA 2.0 date by which
+NSA says to use CNSA 2.0 exclusively for the product's category, set as `cnsa_category` in the answers file (NSA
+CNSA 2.0 FAQ, Ver. 2.0, April 2024): `software-firmware-signing` and `networking` 2030; `web-cloud`,
+`operating-system`, `niche` and `custom-legacy` 2033. "By 2033" is read as the end of 2033. Without a category
+the earliest date, 2030, is used and the report says so. The report and `summary.json` (`deadline`) state the
+date used.
 
 True/false claims may be JSON booleans or "yes"/"no" text, and an algorithm list may be a JSON list or a
 comma-separated string. A1 (customer data flows) is checked against key-establishment and encryption algorithms,
@@ -549,8 +564,9 @@ Stated so a result is not read as more than it is:
 - An outside scan sees the endpoints it is pointed at, so coverage is always declared `partial`.
 - The server's implementing software (PKIC `implementationPurl`) cannot be known from outside and is
   declared `unknown`.
-- SSH is read from local configuration (`sshd -T`), not from a remote handshake. SSH MAC algorithms and host
-  key sizes are not captured yet, so a 1024-bit RSA host key reads as RSA (planned after 1.7.0).
+- SSH is read from local configuration (`sshd -T`), not from a remote handshake. From 1.8.0 this includes the
+  MAC algorithms and each host key's type and size, read from its public half (`<HostKey>.pub`, never the private
+  key); a host key without a readable `.pub` file is listed by algorithm only.
 - Not yet covered: IPsec/VPN, Kerberos, code signing, cloud KMS, database encryption at rest.
 - Windows AD CS template verdicts have been checked by logic inspection; a full Windows CBOM has not yet
   been run end to end through the policy stage.

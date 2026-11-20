@@ -100,3 +100,23 @@ class ReleaseSBOMs(unittest.TestCase):
         self.assertLess(wf.index("name: Checksums"), wf.index("name: Provenance for the release files"))
         self.assertLess(wf.index("name: Provenance for the release files"), wf.index("name: Create the release"))
 
+
+
+class ReleasePreflight(unittest.TestCase):
+    """1.8.0 (#625): every release tag runs Red Hat preflight on the pushed certified image, pinned by SHA-256,
+    before the release is published; results are a release file covered by the checksums."""
+
+    def test_workflow(self):
+        with open(os.path.join(ROOT, ".github", "workflows", "release.yml")) as f:
+            wf = f.read()
+        i = wf.index("name: Red Hat preflight of the certified image")
+        self.assertLess(wf.index("name: Build and push the image"), i)
+        self.assertLess(i, wf.index("name: Checksums"))
+        self.assertLess(i, wf.index("name: Create the release"))
+        step = wf[i:wf.index("name: Checksums")]
+        self.assertRegex(step, r"PREFLIGHT_SHA256: [0-9a-f]{64}\n")
+        self.assertIn("sha256sum -c", step)
+        self.assertIn('"$IMAGE@$DIGEST"', step)
+        self.assertIn(".preflight.json", step)
+        self.assertNotIn("--submit", step)            # submission stays in the cluster (Pyxis key never in GitHub)
+        self.assertNotIn("PYXIS", step.upper().replace("PYXIS KEY", ""))

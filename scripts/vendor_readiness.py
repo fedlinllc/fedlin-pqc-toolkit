@@ -6,7 +6,12 @@ CC BY 4.0), in data/vendor-questions/. Each question carries a claim type:
 
   disclosure  a fact about the product. Where a check exists, the answer is compared with the CBOM.
   capability  the product can do something. Recorded with its evidence; holds only for the version assessed.
-  intent      a plan, date or commitment. Recorded; missing or post-2030 dates are flagged; never verified.
+  intent      a plan, date or commitment. Recorded; missing or late dates are flagged; never verified.
+
+Dates are judged against the end of 2030 under the civilian profile (NIST IR 8547, OMB M-26-15). Under --profile
+nss they are judged against the CNSA 2.0 date for the product's category, set as "cnsa_category" in the answers
+file (NSA CNSA 2.0 FAQ, Ver. 2.0, April 2024, p. 10): software-firmware-signing and networking 2030; web-cloud,
+operating-system, niche and custom-legacy 2033. Without a category, the earliest CNSA 2.0 date (2030) is used.
 
 The seven "common concerns in vendor responses" from the publication are raised from structured fields
 only (claims, evidence lists, the CBOM). Free-text answers are reported, not interpreted.
@@ -34,6 +39,30 @@ import cnsa20_ruleset as cnsa  # noqa: E402
 QUESTIONS = os.path.join(ROOT, "data", "vendor-questions", "asd-cisa-nsa-2026-11.json")
 VALIDATOR = os.path.join(ROOT, "third_party", "pkic-cbom")
 DEADLINE = datetime.date(2030, 12, 31)
+# CNSA 2.0 "exclusively use CNSA 2.0 by" year per product category (NSA CNSA 2.0 FAQ, U/OO/194427-22, Ver. 2.0,
+# April 2024, p. 10). "By <year>" is read as the end of that year, as the civilian 2030 date is (1.8.0).
+CNSA_CATEGORIES = {
+    "software-firmware-signing": (2030, "software and firmware signing"),
+    "networking": (2030, "traditional networking equipment (VPNs, routers)"),
+    "web-cloud": (2033, "web browsers/servers and cloud services"),
+    "operating-system": (2033, "operating systems"),
+    "niche": (2033, "niche equipment (constrained devices, large PKI systems)"),
+    "custom-legacy": (2033, "custom applications and legacy equipment (update or replace)"),
+}
+
+
+def deadline_for(profile, answers):
+    """(date, label) that stated dates are judged against; VendorInputError for an unknown cnsa_category."""
+    cat = answers.get("cnsa_category")
+    if cat not in (None, "") and (not isinstance(cat, str) or cat not in CNSA_CATEGORIES):
+        raise VendorInputError(f"cnsa_category {cat!r} is not one of {', '.join(CNSA_CATEGORIES)}")
+    if profile != "nss":
+        return DEADLINE, "the end of 2030"
+    if not cat:
+        return DEADLINE, ("the end of 2030 (the earliest CNSA 2.0 date; set cnsa_category in the answers file for "
+                          "the product's own date)")
+    year, name = CNSA_CATEGORIES[cat]
+    return datetime.date(year, 12, 31), f"the end of {year} (CNSA 2.0: {name})"
 FIPS_PQC = datetime.date(2024, 8, 13)      # FIPS 203, 204 and 205 published
 # Statuses that come from comparing an answer with the CBOM; date checks are reported separately
 CBOM_STATUSES = ("consistent", "contradicted", "not-evidenced", "not-checked", "unanswered", "no-cbom", "info",
@@ -148,6 +177,9 @@ def template(doc):
             a["claims"] = {k: None for k in q["structured_claims"]}
         answers[q["id"]] = a
     return {"vendor": "", "product": "", "version": "", "answered": "", "cbom": "",
+            # --profile nss only: one of software-firmware-signing, networking, web-cloud, operating-system, niche,
+            # custom-legacy (the CNSA 2.0 date for the product's category); leave empty otherwise
+            "cnsa_category": "",
             "_help": {q["id"]: q["structured_claims"] for q in doc["questions"] if q["structured_claims"]},
             "answers": answers}
 
@@ -355,6 +387,7 @@ def run_check(q, a, facts, ctx):
     chk = q.get("check")
     if not chk:
         return None
+    dl, dl_text = ctx.get("deadline") or DEADLINE, ctx.get("deadline_text") or "the end of 2030"
     if chk == "dated":
         key = next(iter(q["structured_claims"]))
         d, bad = _date_issue(a, key)
@@ -362,14 +395,14 @@ def run_check(q, a, facts, ctx):
             return _r("missing-date", bad)
         if not d:
             return _r("missing-date", f"No date given in `{key}`.")
-        if d > DEADLINE:
-            return _r("late", f"`{key}` = {_claim(a, key)}, after the end of 2030.")
+        if d > dl:
+            return _r("late", f"`{key}` = {_claim(a, key)}, after {dl_text}.")
         if d < FIPS_PQC and key in ("pqc_ready_date", "roadmap_date"):
             return _r("implausible", f"`{key}` = {_claim(a, key)}, before NIST published FIPS 203/204/205 "
                                      "(August 2024); ask what the date refers to.")
         if d < datetime.date.today():
             return _r("past", f"`{key}` = {_claim(a, key)}, already passed: ask for evidence it happened.")
-        return _r("planned", f"`{key}` = {_claim(a, key)}, before the end of 2030. A plan; not verified.")
+        return _r("planned", f"`{key}` = {_claim(a, key)}, before {dl_text}. A plan; not verified.")
     if facts is None:
         if chk == "cbom_supplied":
             if _bool_claim(a, "cbom") is True:
@@ -469,9 +502,9 @@ def run_check(q, a, facts, ctx):
                 return _r("missing-date", (f"Hybrid in use ({', '.join(hyb)}) " if hyb else "Hybrid supported ")
                           + "with no usable `pqc_only_date`; the publication expects a documented de-hybridisation "
                           "plan." + (" " + bad if bad else ""))
-            if plan > DEADLINE:
+            if plan > dl:
                 return _r("late", f"Hybrid treated as transitional, but PQC-only is planned for "
-                                  f"{_claim(a, 'pqc_only_date')}, after the end of 2030.")
+                                  f"{_claim(a, 'pqc_only_date')}, after {dl_text}.")
             if plan < datetime.date.today():
                 if hyb:
                     return _r("contradicted", f"PQC-only was due {_claim(a, 'pqc_only_date')}, but the CBOM still "
@@ -511,8 +544,8 @@ def run_check(q, a, facts, ctx):
                 rows.append(f"{name}: {ok}; in the CBOM" + ("" if direct else f" (within {', '.join(hits)})"))
         ga, bad = _date_issue(a, "ga_date")
         tail = (" " + bad) if bad else ("" if ga else " No `ga_date` given.")
-        if ga and ga > DEADLINE:
-            tail = f" `ga_date` = {_claim(a, 'ga_date')}, after the end of 2030."
+        if ga and ga > dl:
+            tail = f" `ga_date` = {_claim(a, 'ga_date')}, after {dl_text}."
         early = bool(ga and ga < FIPS_PQC)
         if early:
             tail = (f" `ga_date` = {_claim(a, 'ga_date')}, before NIST published FIPS 203/204/205 (August 2024): "
@@ -529,7 +562,7 @@ def run_check(q, a, facts, ctx):
             # not generally available yet: absence from today's CBOM is expected, not a gap (1.6.0)
             rows.append(f"`ga_date` {_claim(a, 'ga_date')} is in the future, so algorithms not yet in the CBOM "
                         "are a plan, not a gap")
-        status = ("late" if ga and ga > DEADLINE
+        status = ("late" if ga and ga > dl
                   else "planned" if missing and future
                   else "not-evidenced" if missing else "missing-date" if bad else "implausible" if early
                   else "below-target" if below else "consistent")
@@ -549,7 +582,7 @@ def run_check(q, a, facts, ctx):
 
 
 # --- concerns -------------------------------------------------------------------------------
-def concerns(doc, answers, results, facts):
+def concerns(doc, answers, results, facts, deadline_text="the end of 2030"):
     """The publication's seven common concerns, raised from structured fields only."""
     out = []
     A = answers.get("answers", {})
@@ -571,7 +604,7 @@ def concerns(doc, answers, results, facts):
     late = [i for i in ("T1", "T3", "I1", "C3", "C5")
             if results.get(i) and results[i]["status"] in ("missing-date", "late", "implausible")]
     if late:
-        out.append(("unclear or deferred transition timelines", "Missing or post-2030 dates: " + ", ".join(late) + "."))
+        out.append(("unclear or deferred transition timelines", f"Missing dates or dates after {deadline_text}: " + ", ".join(late) + "."))
     # "Proprietary or opaque cryptography" is not raised automatically: a name the ruleset does not recognise is
     # not evidence that the vendor uses proprietary cryptography (1.5.1). Such names are listed in the report for
     # review instead.
@@ -630,7 +663,8 @@ def assess(answers_path, profile=None, doc=None):
     known = {q["id"] for q in doc["questions"]}
     unknown = sorted(k for k in answers.get("answers", {}) if k not in known)
     inputs = {"answers": {"file": os.path.basename(answers_path), "sha256": hashlib.sha256(raw).hexdigest()}}
-    facts, ctx = None, {"profile": profile}
+    dl, dl_text = deadline_for(profile, answers)
+    facts, ctx = None, {"profile": profile, "deadline": dl, "deadline_text": dl_text}
     cbom_path = answers_cbom_path(answers, answers_path)
     if cbom_path:
         try:
@@ -652,7 +686,7 @@ def assess(answers_path, profile=None, doc=None):
         if r:
             results[q["id"]] = r
     return {"doc": doc, "answers": answers, "profile": profile, "facts": facts, "ctx": ctx,
-            "results": results, "concerns": concerns(doc, answers, results, facts),
+            "results": results, "concerns": concerns(doc, answers, results, facts, dl_text),
             "cbom_path": cbom_path if facts is not None else "", "unknown_ids": unknown, "inputs": inputs,
             "run_date": datetime.date.today().isoformat()}
 
@@ -708,7 +742,8 @@ def report_md(res):
           "vendor first." if contra else "No answer contradicts the vendor's CBOM."),
          "",
          "Disclosure answers are compared with the vendor's CBOM where a check exists. Capability answers hold "
-         "only for the version assessed. Intent answers are plans and are not verified.",
+         "only for the version assessed. Intent answers are plans and are not verified. Stated dates are judged "
+         f"against {res['ctx'].get('deadline_text') or 'the end of 2030'}.",
          ""]
     if not res["facts"]:
         L += ["> No CBOM was supplied, so no disclosure answer could be checked.", ""]
@@ -770,7 +805,112 @@ def summary(res):
             "evidence_cited": sum(1 for a in A.values() if isinstance(a, dict) and a.get("evidence")),
             "unknown_ids": res.get("unknown_ids", []), "inputs": res.get("inputs", {}),
             "toolkit_version": _toolkit_version(), "ruleset_version": cnsa.RULESET_VERSION,
+            "deadline": {"date": (res["ctx"].get("deadline") or DEADLINE).isoformat(),
+                         "basis": res["ctx"].get("deadline_text") or "the end of 2030",
+                         "cnsa_category": (res["answers"].get("cnsa_category") or None)
+                         if res["profile"] == "nss" else None},
             "assessed": res.get("run_date")}
+
+
+# --- roll-up across vendors -------------------------------------------------------------------
+_SUMMARY_KEYS = {"vendor", "statuses", "contradicted", "concerns", "questions", "answered"}
+# what needs the buyer's attention first: a contradiction, then a late or implausible date, then a gap
+_ATTENTION = ("contradicted", "late", "implausible", "not-evidenced", "below-target", "missing-date", "past")
+
+
+def load_summaries(paths):
+    """[(path, summary, sha256)] from summary.json files or directories of them; VendorInputError otherwise."""
+    files = []
+    for p in paths:
+        if os.path.isdir(p):
+            files += sorted(os.path.join(p, f) for f in os.listdir(p) if f.endswith(".summary.json"))
+        else:
+            files.append(p)
+    if not files:
+        raise VendorInputError("no *.summary.json files found (run `assess` for each vendor first)")
+    files = list(dict.fromkeys(os.path.realpath(f) for f in files))      # a file given twice counts once
+    out = []
+    for f in files:
+        try:
+            with open(f, "rb") as fh:
+                raw = fh.read()
+            sm = json.loads(raw)
+        except OSError as e:
+            raise VendorInputError(f"{f}: {e.strerror}")
+        except (ValueError, RecursionError) as e:
+            raise VendorInputError(f"{f}: not valid JSON ({str(e)[:100]})")
+        bad = (not isinstance(sm, dict) or not _SUMMARY_KEYS <= set(sm) or not isinstance(sm.get("statuses"), dict)
+               or not all(isinstance(k, str) and re.fullmatch(r"[A-Z][0-9]{1,2}", k) and isinstance(v, str)
+                          for k, v in sm["statuses"].items())
+               or not isinstance(sm.get("contradicted"), list)
+               or not all(isinstance(x, str) for x in sm["contradicted"])
+               or not isinstance(sm.get("concerns"), list)
+               or not isinstance(sm.get("deadline") or {}, dict))
+        if bad:
+            raise VendorInputError(f"{f}: not a vendor_readiness summary (expected the .summary.json `assess` writes)")
+        out.append((f, sm, hashlib.sha256(raw).hexdigest()))
+    return out
+
+
+def rollup(paths):
+    """Vendors side by side, from their assess summaries. Facts only: statuses and counts, sorted by what needs
+    attention first. No combined score: a number would read as a determination (letter grades were retired in
+    1.5.0 for the same reason)."""
+    loaded = load_summaries(paths)
+    rows = []
+    for f, sm, sha in loaded:
+        st = sm["statuses"]
+        n = {k: sum(1 for v in st.values() if v == k) for k in _ATTENTION}
+        dl = sm.get("deadline") or {}
+        rows.append({"vendor": sm.get("vendor") or "?", "product": sm.get("product") or "",
+                     "version": sm.get("version") or "", "profile": sm.get("profile"),
+                     "answered": sm.get("answered"), "questions": sm.get("questions"),
+                     "cbom": sm.get("cbom"), "cbomCoverage": sm.get("cbom_coverage"),
+                     "contradicted": sorted(sm.get("contradicted") or []), "counts": n,
+                     "concerns": list(sm.get("concerns") or []), "statuses": st,
+                     "deadline": dl.get("date"), "deadlineBasis": dl.get("basis"),
+                     "assessed": sm.get("assessed"), "toolkitVersion": sm.get("toolkit_version"),
+                     "rulesetVersion": sm.get("ruleset_version"),
+                     "source": {"file": os.path.basename(f), "sha256": sha}})
+    rows.sort(key=lambda r: tuple(-r["counts"][k] for k in _ATTENTION) + (str(r["vendor"]).lower(),))
+    notes = []
+    for key, label in (("profile", "profiles"), ("rulesetVersion", "ruleset versions"), ("deadline", "deadlines")):
+        vals = sorted({str(r[key]) for r in rows})
+        if len(vals) > 1:
+            notes.append(f"The vendors were assessed under different {label} ({', '.join(vals)}); compare with care.")
+    qids = sorted({q for r in rows for q in r["statuses"]},
+                  key=lambda q: ("LATIC".index(q[0]) if q[0] in "LATIC" else 9, int(q[1:])))
+    return {"rollupFormat": "fedlin.vendor-readiness-rollup", "rollupFormatVersion": "1.0",
+            "vendors": rows, "questions": qids, "notes": notes,
+            "toolkitVersion": _toolkit_version(), "created": datetime.date.today().isoformat()}
+
+
+def rollup_md(ru):
+    L = ["# Vendor PQC readiness: roll-up", "",
+         f"{len(ru['vendors'])} vendor(s), from each vendor's `assess` summary; fedlin-pqc-toolkit "
+         f"{ru['toolkitVersion']}, {ru['created']}.", "",
+         "> **Not a ranking or a determination.** Vendors are ordered by what needs a question first: contradictions "
+         "between an answer and the vendor's own CBOM, then late or implausible dates, then claims the CBOM cannot "
+         "show. There is no combined score. Each vendor's report has the detail.", ""]
+    L += [f"> {_cell(n)}" for n in ru["notes"]] + ([""] if ru["notes"] else [])
+    L += ["| Vendor | Product | Contradicted | Dates: late / implausible / missing | Not evidenced | Concerns | CBOM | "
+          "Answered | Deadline used |", "|---|---|---|---|---|---|---|---|---|"]
+    for r in ru["vendors"]:
+        c = r["counts"]
+        L.append("| " + " | ".join(_cell(str(x)) for x in (
+            r["vendor"], f"{r['product']} {r['version']}".strip() or "-",
+            (f"{len(r['contradicted'])}: {', '.join(r['contradicted'])}" if r["contradicted"] else "0"),
+            f"{c['late']} / {c['implausible']} / {c['missing-date']}", c["not-evidenced"], len(r["concerns"]),
+            (f"yes ({r['cbomCoverage']})" if r["cbom"] else "none"),
+            f"{r['answered']}/{r['questions']}", r["deadline"] or "-")) + " |")
+    L += ["", "## Checked questions by vendor", "",
+          "| Vendor | " + " | ".join(ru["questions"]) + " |", "|---|" + "---|" * len(ru["questions"])]
+    for r in ru["vendors"]:
+        L.append("| " + _cell(str(r["vendor"])) + " | "
+                 + " | ".join(_cell(r["statuses"].get(q, "-")) for q in ru["questions"]) + " |")
+    L += ["", "Sources: " + "; ".join(f"{_cell(r['source']['file'])} (SHA-256 {r['source']['sha256'][:16]}...)"
+                                      for r in ru["vendors"]) + "."]
+    return "\n".join(L)
 
 
 def main(argv=None):
@@ -786,7 +926,28 @@ def main(argv=None):
     s.add_argument("--fail-on", default="",
                    help="comma-separated check statuses that make the exit code 1, e.g. contradicted,late; an "
                         "unknown status is an error (exit 2). Default: exit 0 whatever the checks found")
+    s = sub.add_parser("rollup", help="vendors side by side, from their assess summaries")
+    s.add_argument("--summaries", nargs="+", required=True,
+                   help="*.summary.json files written by assess, or directories containing them")
+    s.add_argument("--out", required=True, help="roll-up report, ending .md; a .json of the same name is written beside it")
     a = ap.parse_args(argv)
+    if a.cmd == "rollup":
+        if not a.out.endswith(".md"):
+            sys.stderr.write("[error] --out must end in .md (the .json is written beside it)\n")
+            return 2
+        try:
+            ru = rollup(a.summaries)
+        except VendorInputError as e:
+            sys.stderr.write(f"[error] {e}\n")
+            return 2
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(rollup_md(ru) + "\n")
+        with open(a.out[:-3] + ".json", "w") as f:
+            json.dump(ru, f, indent=2)
+        top = ru["vendors"][0]
+        print(f"[ok] {a.out}: {len(ru['vendors'])} vendor(s); first to question: {top['vendor']} "
+              f"({len(top['contradicted'])} contradicted)")
+        return 0
     fail = set()
     if a.cmd == "assess":
         fail = {x.strip().lower() for x in a.fail_on.split(",") if x.strip()}

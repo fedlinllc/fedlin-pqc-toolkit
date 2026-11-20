@@ -11,6 +11,42 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.8.0-rc.1] - 2026-11-20
+
+Release candidate: first tagged run of the release-time preflight step. Ruleset 1.0.7 (see [CORRECTIONS.md](CORRECTIONS.md)).
+
+### Added
+- **Vendor readiness under `--profile nss` judges dates against CNSA 2.0** (#624). A vendor's stated dates were
+  always compared with the end of 2030. Under `nss` they are now compared with the CNSA 2.0 "exclusively use"
+  date for the product's category, given as `cnsa_category` in the answers file (2030 for software and firmware
+  signing and for networking equipment; 2033 for web and cloud, operating systems, niche equipment and custom or
+  legacy applications; NSA CNSA 2.0 FAQ, April 2024). Without a category the earliest date (2030) applies and the
+  report says so. An unknown category is an input error (exit 2). The summary adds `deadline`.
+- Fixes from an independent review of this batch: every spelling of HSS and XMSS^MT (`XMSS-MT-SHA2_...`,
+  `id-alg-hss-lms-hashsig`, `LMS/HSS`) gets the multitree verdict; `rollup` rejects malformed summaries (exit 2,
+  no traceback), escapes everything it prints, counts a file given twice once, and needs `--out` ending `.md`;
+  `pqcmm_evidence.py --answers` uses the same CNSA 2.0 deadline as `assess`.
+- **Red Hat preflight on every release** (#625). The release workflow runs Red Hat's preflight (1.22.0, pinned by
+  SHA-256) on the certified image it just pushed, before publishing the release; a failure stops the GitHub
+  release (the image is already pushed by then, so a failed tag leaves that image to be withdrawn by hand).
+  The results are a release file (`fedlin-pqc-toolkit-<v>.preflight.json`) covered by `SHA256SUMS` and the
+  provenance. Submitting results to Red Hat is not automated here: it needs the certification component and a
+  Red Hat API key, which are kept out of GitHub.
+- **SSH MAC algorithms and host key sizes** (#632). The local SSH capture (`--local-ssh`, `sshd -T`) now records the
+  configured MACs and, for each `HostKey`, its type and size from the public half (`ssh-keygen -l` on
+  `<path>.pub`; the private key is never read). A 1024-bit RSA host key is now Critical instead of reading as
+  RSA of unknown size, and `hmac-md5` is listed and judged.
+- **`vendor_readiness.py rollup`** (#624): several vendors side by side from their `assess` summaries, ordered by
+  what needs a question first (contradictions, then late or implausible dates, then claims the CBOM cannot
+  show), with each checked question's status. Facts only: no combined score. Notes mixed profiles, rulesets or
+  deadlines; records each input's SHA-256. Output `fedlin.vendor-readiness-rollup` 1.0 (`.md` and `.json`).
+
+### Fixed
+- **HSS and XMSS^MT are not CNSA 2.0.** Under `--profile nss` the multitree hash-based signatures were read as
+  LMS / XMSS and rated compliant. NSA's CNSA 2.0 FAQ (April 2024) allows only single-tree LMS and XMSS from SP
+  800-208 ("the multitree algorithms HSS and XMSSMT are not allowed"). They are now quantum-resistant but not
+  CNSA 2.0 (Low) under `nss`, and still compliant under `civilian`.
+
 ## [1.7.0] - 2026-11-20
 
 Ruleset 1.0.6 (see [CORRECTIONS.md](CORRECTIONS.md)). Everything in 1.7.0-rc.1, plus: the image SBOMs name the
@@ -471,7 +507,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.0-rc.1...HEAD
+[1.8.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...v1.8.0-rc.1
 [1.7.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...v1.7.0
 [1.7.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...v1.7.0-rc.1
 [1.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0
