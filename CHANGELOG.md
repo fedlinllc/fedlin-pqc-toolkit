@@ -11,6 +11,11 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-20
+
+Ruleset 1.0.6 (see [CORRECTIONS.md](CORRECTIONS.md)). Everything in 1.7.0-rc.1, plus: the image SBOMs name the
+image correctly (on rc.1 the release workflow's registry login made syft hide the organisation name).
+
 ## [1.7.0-rc.1] - 2026-11-19
 
 Release candidate: proves the new release SBOM steps. Ruleset 1.0.6 (see [CORRECTIONS.md](CORRECTIONS.md)).
@@ -466,7 +471,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0-rc.1...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...v1.7.0
 [1.7.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...v1.7.0-rc.1
 [1.6.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0
 [1.6.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.5.2...v1.6.0-rc.1

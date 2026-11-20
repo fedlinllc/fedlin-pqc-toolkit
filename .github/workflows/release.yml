@@ -121,7 +121,8 @@ jobs:
           subject-digest: ${{ steps.probe.outputs.digest }}
           push-to-registry: true
       # Image SBOMs: the packages actually inside each image (UBI RPMs, Node modules, the probe's Alpine OpenSSL),
-      # read from the pushed digest (1.7.0; before, the only SBOM was of the source tree).
+      # read from the pushed digest (1.7.0; before, the only SBOM was of the source tree). The images are public: no
+      # registry credentials, which syft would also redact (the org name) from the SBOM it writes.
       - name: SBOM of the image
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
         env:
@@ -129,8 +130,6 @@ jobs:
           SYFT_SOURCE_VERSION: ${{ steps.v.outputs.version }}
         with:
           image: ${{ env.IMAGE }}@${{ steps.image.outputs.digest }}
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
           format: cyclonedx-json@1.6
           output-file: dist/fedlin-pqc-toolkit-${{ steps.v.outputs.version }}.image.sbom.cdx.json
           upload-artifact: false
@@ -142,8 +141,6 @@ jobs:
           SYFT_SOURCE_VERSION: ${{ steps.v.outputs.version }}
         with:
           image: ${{ env.IMAGE }}-probe@${{ steps.probe.outputs.digest }}
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
           format: cyclonedx-json@1.6
           output-file: dist/fedlin-pqc-toolkit-probe-${{ steps.v.outputs.version }}.image.sbom.cdx.json
           upload-artifact: false
