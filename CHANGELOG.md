@@ -11,6 +11,17 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-11-23
+
+Ruleset 1.0.8. Ships the 1.8.1 changes: the v1.8.1 tag's release run stopped at the probe image (below), so
+1.8.1 was never released; its main image (`:1.8.1`) was pushed before the failure and is superseded by 1.8.2.
+
+### Fixed
+- **Images build again.** Alpine 3.22 replaced `openssl 3.5.9-r0` with `3.5.9-r1` (same OpenSSL 3.5.9, package
+  rebuild) and dropped `-r0`, so `apk add openssl=3.5.9-r0` failed and the 1.8.1 release stopped at the probe image.
+  The pin is now `3.5.9-r1` in both Containerfiles, `setup.sh` and `toolkit.lock`. `toolkit.lock` also records
+  ruleset 1.0.8, which 1.8.1 missed.
+
 ## [1.8.1] - 2026-11-23
 
 Ruleset 1.0.8 (see [CORRECTIONS.md](CORRECTIONS.md)).
@@ -523,7 +534,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.0...v1.8.2
 [1.8.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...v1.8.0
 [1.8.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...v1.8.0-rc.1

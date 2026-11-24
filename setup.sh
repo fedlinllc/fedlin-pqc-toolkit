@@ -22,7 +22,7 @@ bin/cyclonedx --version
 # endpoint scans still run (unobserved key exchange is reported as unknown) and --theia-dir is unavailable.
 HAVE_PODMAN=0; command -v podman >/dev/null 2>&1 && HAVE_PODMAN=1
 if [ "$HAVE_PODMAN" = 1 ] && ! podman image exists localhost/fedlin-kex-probe:0.1; then
-  echo "building the key-exchange probe image (pinned Alpine + openssl 3.5.9-r0) ..."
+  echo "building the key-exchange probe image (pinned Alpine + openssl 3.5.9-r1) ..."
   podman build -q -t localhost/fedlin-kex-probe:0.1 images/kex-probe
 fi
 

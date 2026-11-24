@@ -3,6 +3,6 @@
 # Base pinned by digest; openssl pinned to an exact Alpine package version. Nothing is installed at
 # scan time. Rebuild deliberately and record the new image digest in toolkit.lock.
 FROM docker.io/library/alpine:3.22@sha256:9db2934886712d877c932e07249c75a59e6ca27adfbccc05261987a17bef2d63
-RUN apk add --no-cache openssl=3.5.9-r0
+RUN apk add --no-cache openssl=3.5.9-r1
 USER 65534:65534
 ENTRYPOINT []

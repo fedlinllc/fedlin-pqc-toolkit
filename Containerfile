@@ -20,7 +20,7 @@ RUN git clone https://github.com/PQCA/cbomkit-theia /src \
 # UBI 9 OpenSSL follows the host's FIPS mode and crypto policy and may refuse X25519MLKEM768. The probe
 # OpenSSL is used only to observe which group a server negotiates; it never touches the host's config.
 FROM docker.io/library/alpine:3.22@sha256:9db2934886712d877c932e07249c75a59e6ca27adfbccc05261987a17bef2d63 AS kexprobe
-RUN apk add --no-cache openssl=3.5.9-r0 \
+RUN apk add --no-cache openssl=3.5.9-r1 \
  && mkdir -p /out/bin /out/lib \
  && cp /usr/bin/openssl /out/bin/ \
  && cp /lib/ld-musl-x86_64.so.1 /usr/lib/libssl.so.3 /usr/lib/libcrypto.so.3 /out/lib/ \
