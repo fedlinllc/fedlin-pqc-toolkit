@@ -30,7 +30,7 @@ with "None"; a classically broken target contains "Replace now".
 import os
 import re
 
-RULESET_VERSION = "1.0.7"
+RULESET_VERSION = "1.0.8"
 PROFILES = ("civilian", "nss")
 DEFAULT_PROFILE = os.environ.get("FEDLIN_PQC_PROFILE", "civilian")
 
@@ -1138,13 +1138,15 @@ def _verdict_for(cid, bits, profile, label):
         v["disallowed_after"] = 2035
         sig = v["primitive"] == "signature" or cid in ("ed25519", "ed448", "eddsa")
         kem = a["primitive"] in ("key-agree",) or cid in ("x25519", "x448", "ecdh", "dh", "mqv")
+        # A bare RSA or EC key (rsaEncryption, id-ecPublicKey) can sign or establish keys, so its target names the
+        # replacement for each use. A certificate key is a signature key: ML-DSA or SLH-DSA, never ML-KEM (1.0.8).
         if profile == "nss":
             if sig:
                 t = "ML-DSA-87 (or LMS/XMSS for firmware/code signing) per CNSA 2.0"
             elif kem:
                 t = "ML-KEM-1024 key establishment per CNSA 2.0"
             else:
-                t = "ML-KEM-1024 (key establishment) / ML-DSA-87 (signature) per CNSA 2.0"
+                t = "ML-DSA-87 for signatures (certificates included); ML-KEM-1024 for key establishment; per CNSA 2.0"
         else:
             when = "deprecated after 2030, disallowed after 2035 (IR 8547)"
             if sig:
@@ -1152,7 +1154,8 @@ def _verdict_for(cid, bits, profile, label):
             elif kem:
                 t = f"ML-KEM (FIPS 203), e.g. hybrid X25519MLKEM768; {when}"
             else:
-                t = f"ML-KEM (FIPS 203) / ML-DSA (FIPS 204); {when}"
+                t = (f"ML-DSA (FIPS 204) or SLH-DSA (FIPS 205) for signatures (certificates included); "
+                     f"ML-KEM (FIPS 203) for key establishment; {when}")
         if "key transport" in (label or ""):
             v["primitive"], v["lane"] = "key-agree", "key-establishment"
             v["note"] = ("RSA key transport (static-RSA TLS suite): no forward secrecy, so recorded sessions "

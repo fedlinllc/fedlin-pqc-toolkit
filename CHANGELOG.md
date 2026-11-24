@@ -11,6 +11,18 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-23
+
+Ruleset 1.0.8 (see [CORRECTIONS.md](CORRECTIONS.md)).
+
+### Fixed
+- **Certificate key target no longer leads with ML-KEM.** A bare RSA or EC key (`rsaEncryption`,
+  `id-ecPublicKey`, the lookup a certificate's key uses) had the target "ML-KEM (FIPS 203) / ML-DSA (FIPS 204)".
+  ML-KEM is a key-encapsulation mechanism and cannot replace a certificate key. The target now names each use:
+  ML-DSA or SLH-DSA for signatures (certificates included), ML-KEM for key establishment; under `nss`, ML-DSA-87
+  and ML-KEM-1024. Status, priority and dates are unchanged. The fedlin.com quick check and the MCP hub show the
+  new target once the release's verdict table is published.
+
 ## [1.8.0] - 2026-11-20
 
 Ruleset 1.0.7 (see [CORRECTIONS.md](CORRECTIONS.md)). Everything in 1.8.0-rc.1, unchanged.
@@ -511,7 +523,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...v1.8.0
 [1.8.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...v1.8.0-rc.1
 [1.7.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.6.0...v1.7.0

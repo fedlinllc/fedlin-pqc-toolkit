@@ -4,6 +4,14 @@ Every change to a verdict, a cited date or a public claim is recorded here with 
 wrong, what it is now, and the source that settled it. Verdicts come from `scripts/cnsa20_ruleset.py`;
 each rule cites a source key defined in `SOURCES` in that file.
 
+## 2026-11-23: ruleset 1.0.8 (target for a bare RSA or EC key)
+
+| Identifier | Was (1.0.7) | Now (1.0.8) | Source |
+|---|---|---|---|
+| A bare RSA, EC, ElGamal or SM2 key (`rsaEncryption`, `RSA`, `id-ecPublicKey`, `EC`, `elgamal`, `sm2`), which is how a certificate's public key is looked up | Target `ML-KEM (FIPS 203) / ML-DSA (FIPS 204)` (nss: `ML-KEM-1024 (key establishment) / ML-DSA-87 (signature)`), which listed the key-encapsulation standard first for a key that, in a certificate, only signs | Target names each use: `ML-DSA (FIPS 204) or SLH-DSA (FIPS 205) for signatures (certificates included); ML-KEM (FIPS 203) for key establishment` (nss: `ML-DSA-87 for signatures (certificates included); ML-KEM-1024 for key establishment`). Status, priority and dates unchanged. Keys named for one use (`ecdsa`, `RSASSA-PSS`, `x25519`, `ecdh`) are unchanged | FIPS203 (ML-KEM is a key-encapsulation mechanism), FIPS204, FIPS205, IR8547 |
+
+Found by the 2026-11-23 audit of the fedlin.com quick check: a certificate key signs (FIPS 204 and FIPS 205 are the signature standards; FIPS 203 is key encapsulation only). Checked by diffing the 1.0.7 and 1.0.8 verdict tables: 13 entries changed, all with canonical `ec`, `rsa`, `elgamal` or `sm2`; the index is unchanged.
+
 ## 2026-11-20: ruleset 1.0.7 (NSA CNSA 2.0 FAQ, read in full)
 
 | Identifier | Was (1.0.6) | Now (1.0.7) | Source |

@@ -328,3 +328,25 @@ class MultitreeSpellings107(unittest.TestCase):
         for n in ("chss", "xmssmtx"):
             self.assertIsNone(r.classify(n)["canonical"], n)
         self.assertIn("L=1", r.classify("HSS")["note"])
+
+
+class BareKeyTarget108(unittest.TestCase):
+    """Ruleset 1.0.8: a bare RSA or EC key (a certificate's rsaEncryption / id-ecPublicKey) never gets ML-KEM as
+    its only or first target. A certificate key signs, so the signature replacement (ML-DSA / SLH-DSA) leads and
+    ML-KEM is named only for key establishment. Found by the 2026-11-23 audit of the fedlin.com quick check."""
+
+    def test_bare_keys(self):
+        for n, bits in (("id-ecPublicKey", 256), ("EC", 384), ("rsaEncryption", 2048), ("RSA", 3072)):
+            civ = r.classify(n, bits, profile="civilian")["cnsa_target"]
+            self.assertTrue(civ.startswith("ML-DSA (FIPS 204) or SLH-DSA (FIPS 205) for signatures"), (n, civ))
+            self.assertIn("ML-KEM (FIPS 203) for key establishment", civ, n)
+            self.assertNotIn("ML-KEM (FIPS 203) / ML-DSA", civ, n)
+            nss = r.classify(n, bits, profile="nss")["cnsa_target"]
+            self.assertTrue(nss.startswith("ML-DSA-87 for signatures"), (n, nss))
+
+    def test_specific_uses_unchanged(self):
+        self.assertTrue(r.classify("ecdsa", 256)["cnsa_target"].startswith("ML-DSA (FIPS 204) or SLH-DSA (FIPS 205);"))
+        self.assertTrue(r.classify("x25519")["cnsa_target"].startswith("ML-KEM (FIPS 203), e.g. hybrid"))
+
+    def test_version(self):
+        self.assertEqual(r.RULESET_VERSION, "1.0.8")

@@ -97,9 +97,9 @@ FIPS-mode host use `fedlin-pqc-toolkit-probe`, see [FIPS-mode scan hosts](#fips-
 ```bash
 mkdir -p out
 podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD/out:/out:Z" \
-  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.0 \
+  ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.1 \
   --no-runtime --endpoints example.com --name example.com --report --out /out/cbom.json
-# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.0 ...
+# Docker: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.1 ...
 ```
 
 ## Verify a release
@@ -109,8 +109,8 @@ and every file and the image carry Sigstore-signed SLSA build provenance that na
 (releases before 1.0.0 are tags only):
 
 ```bash
-gh attestation verify fedlin-pqc-toolkit-1.8.0.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
-gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.0 --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify fedlin-pqc-toolkit-1.8.1.tar.gz --repo fedlinllc/fedlin-pqc-toolkit
+gh attestation verify oci://ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.1 --repo fedlinllc/fedlin-pqc-toolkit
 sha256sum -c --ignore-missing SHA256SUMS   # checks the files you downloaded
 ```
 
@@ -344,7 +344,7 @@ Register it with absolute paths (a client starts the server from its own working
 claude mcp add fedlin-pqc -- python3 -I /path/to/fedlin-pqc-toolkit/scripts/mcp_server.py --root /path/to/out
 # or from the image, with no network and the folder read-only:
 claude mcp add fedlin-pqc -- podman run -i --rm --network none -v /path/to/out:/data:ro,Z \
-  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.0 scripts/mcp_server.py --root /data
+  --entrypoint python3 ghcr.io/fedlinllc/fedlin-pqc-toolkit:1.8.1 scripts/mcp_server.py --root /data
 ```
 
 Other clients (for example Claude Desktop's `claude_desktop_config.json`) take the same command as JSON:
