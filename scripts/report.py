@@ -312,6 +312,10 @@ def other_assets(bom):
         if at == "protocol" and kex and any(cnsa.classify(k).get("quantum_vulnerable") is True for k in kex):
             hndl.append((c.get("name", "TLS session"), "key exchange " + ", ".join(kex) + " is quantum-vulnerable; "
                          "recorded sessions can be decrypted later", "High"))
+        elif at == "protocol" and not kex and p.get("fedlin:hndlInferred"):
+            # No key exchange recorded, but the pipeline's evidence rules ML-KEM out (fedlin:hndlInferred, 1.9.0)
+            hndl.append((c.get("name", "TLS session"), p["fedlin:hndlInferred"] + ", which is quantum-vulnerable; "
+                         "recorded sessions can be decrypted later", "High"))
     return counts, hndl
 
 
@@ -477,7 +481,9 @@ def server_configuration(bom):
                      "unanswered": [v for v in (p.get("fedlin:untestedProtocolVersions") or "").split(",") if v],
                      "items": items, "note": p.get("fedlin:enumerationNote", ""), "tool": p.get("fedlin:enumerationTool", ""),
                      "truncated": p.get("fedlin:enumerationTruncated", ""),
-                     "incomplete": p.get("fedlin:enumerationIncomplete", "")})
+                     "incomplete": p.get("fedlin:enumerationIncomplete", ""),
+                     "not_tested": [f for f in p.get("fedlin:enumerationNotTested", "").split(",") if f],
+                     "legacy": "fedlin:enumerationNotTested" not in p})
     return rows
 
 
@@ -855,8 +861,13 @@ def _build_report(bom, self_serve=False, brand="FEDLIN", signed=False, attestati
         if refused and profile == "nss":
             L.append(f"- Under CNSA 2.0 the key-establishment target is ML-KEM-1024. Groups refused by at least one "
                      f"endpoint: {', '.join(refused)}.")
-        L.append("- Not tested: suites the enumeration client (OpenSSL 3.5) does not implement (3DES, RC4, export). "
-                 "A version or group listed as not tested got no answer, or could not be tested with this client; "
+        nt = sorted({f for r in conf for f in r["not_tested"]})
+        if not nt and any(r["status"] == "complete" and r["legacy"] for r in conf):
+            nt = ["3DES", "RC4", "export (CBOM from before 1.9.0: client capability not recorded)"]
+        L.append("- Not tested: " + (f"cipher suites of the families the enumeration client cannot offer ({', '.join(nt)}), "
+                                     "so whether a server accepts them is unknown; another scanner is needed to rule "
+                                     "them out. " if nt else "")
+                 + "A version or group listed as not tested got no answer, or could not be tested with this client; "
                  "it is never counted as refused.")
         inc = [f"{r['server']} ({r['incomplete']})" for r in conf if r["incomplete"]]
         if inc:

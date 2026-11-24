@@ -18,7 +18,7 @@ from test_mcp_server import make_outputs  # noqa: E402
 CBOM_PROPERTIES = {
     "fedlin:enumeration", "fedlin:enumerationTool", "fedlin:acceptedProtocolVersions",
     "fedlin:untestedProtocolVersions", "fedlin:acceptedGroups", "fedlin:refusedGroups", "fedlin:untestedGroups",
-    "fedlin:dhGroupBits", "fedlin:enumerationTruncated", "fedlin:enumerationIncomplete", "fedlin:enumerationNote", "fedlin:certificateSelectedBy",
+    "fedlin:dhGroupBits", "fedlin:enumerationTruncated", "fedlin:enumerationIncomplete", "fedlin:enumerationNote", "fedlin:enumerationNotTested", "fedlin:hndlInferred", "fedlin:certificateSelectedBy",
     "fedlin:sha256Fingerprint", "fedlin:not_captured", "fedlin:observedIn", "fedlin:certificateProbes",
     "fedlin:capability", "fedlin:capture", "fedlin:chain_depth", "fedlin:classicalOnlyCommand",
     "fedlin:classicalOnlyNegotiated", "fedlin:classicalOnlyOffer", "fedlin:classicalOnlyOfferReduced",

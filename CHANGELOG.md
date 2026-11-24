@@ -11,6 +11,34 @@ the policy result and changes only when a verdict changes; each verdict change i
 
 ## [Unreleased]
 
+## [1.9.0-rc.1] - 2026-11-24
+
+Release candidate. Ruleset 1.0.8, unchanged (no verdict changes). Both changes come from a rerun of the 2026-11-15
+competitive comparison against 1.8.0; both concern CBOM and report output understating exposure. CMVP snapshot
+refreshed to 2026-11-24 (42 of 768 listed certificates in the curated families).
+
+### Added
+- **`fedlin:enumerationNotTested`** on enumerated TLS endpoints: what the enumeration client cannot offer, so
+  whether the server accepts it is unknown. Cipher-suite families are asked of the client binary at scan time (the
+  Alpine OpenSSL in the probe image lacks 3DES, RC4, DES, IDEA, SEED and export suites); SSLv3 and SSLv2 are always
+  listed, as they are never probed. `fedlin:enumeration = complete` means every test this client can make was made;
+  it never meant those were refused. The report's server-configuration section names them from the CBOM instead of
+  a fixed list and says another scanner is needed to rule them out; a CBOM from before 1.9.0 keeps the old caveat.
+  An endpoint that refused every handshake names them the same way. Found by the competitive rerun of 2026-11-23:
+  testssl.sh saw DES-CBC3-SHA accepted on two endpoints the CBOM marked complete.
+- **`fedlin:hndlInferred`** on a TLS endpoint with no recorded key exchange when the evidence rules ML-KEM out: the
+  host's default handshake (which offers TLS 1.3) negotiated TLS 1.2 or lower, the enumeration completed, it accepted
+  a classical group, and it saw neither TLS 1.3 nor an ML-KEM group accepted. The value gives that reason.
+
+### Fixed
+- **HNDL count missed TLS 1.2 endpoints with no recorded key exchange.** When only a FIPS-mode client reached an
+  endpoint, its key exchange was not recorded and the endpoint was left out of the harvest-now, decrypt-later list.
+  An endpoint carrying `fedlin:hndlInferred` now counts, with the reason given, in the report, `hndl_exposures` and
+  the PQCMM evidence HNDL register alike, and is no longer also listed there as "exposure unknown". A TLS 1.3
+  endpoint with no recorded key exchange still does not count, and neither does a TLS 1.2 record from a probe that
+  did not offer TLS 1.3. Found by the 2026-11-23 competitive rerun (client-cert-missing.badssl.com); the review of
+  this release candidate moved the rule into the pipeline so every output agrees.
+
 ## [1.8.2] - 2026-11-23
 
 Ruleset 1.0.8. Ships the 1.8.1 changes: the v1.8.1 tag's release run stopped at the probe image (below), so
@@ -534,7 +562,8 @@ listed in [CHANGELOG-0.x.md](CHANGELOG-0.x.md).
 - Terminology section in the README: the toolkit says "quantum-resistant", never "quantum-safe"; third-party
   wording is quoted as written. `tests/test_terminology.py` enforces it.
 
-[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.9.0-rc.1...HEAD
+[1.9.0-rc.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.2...v1.9.0-rc.1
 [1.8.2]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.0...v1.8.2
 [1.8.1]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/fedlinllc/fedlin-pqc-toolkit/compare/v1.7.0...v1.8.0

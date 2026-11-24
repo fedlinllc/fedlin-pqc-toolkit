@@ -100,7 +100,8 @@ class Facts:
             kex = p.get(P + "keyExchange") or "unknown"
             r = cnsa.classify(kex, profile=self.profile) if kex != "unknown" else {}
             out.append({"name": c.get("name"), "method": p.get(P + "observationMethod", ""),
-                        "kex": kex, "kex_vulnerable": r.get("quantum_vulnerable"),
+                        "kex": kex, "kex_vulnerable": True if (kex == "unknown" and p.get("fedlin:hndlInferred"))
+                        else r.get("quantum_vulnerable"), "hndl_inferred": p.get("fedlin:hndlInferred", ""),
                         "kex_family": r.get("family"), "kex_canonical": r.get("canonical") or "",
                         "auth": p.get(P + "authentication", ""), "enc": p.get(P + "encryption", ""),
                         "server": p.get(P + "endpointRole:server", ""), "version": p.get(P + "protocolVersion", ""),
@@ -329,9 +330,10 @@ def evidence(F):
                      "derived", note)
     hndl = [i for i in ifaces if i["kex_vulnerable"]]
     unk = [i for i in ifaces if i["kex"] == "unknown"]
-    reg = [f"{i['name']}: key exchange {i['kex']} (quantum-vulnerable): traffic recorded today could be decrypted "
-           f"later" for i in hndl]
-    reg += [f"{i['name']}: key exchange not observed; exposure unknown" for i in unk]
+    reg = [(f"{i['name']}: {i['hndl_inferred']}" if i.get("hndl_inferred") else
+            f"{i['name']}: key exchange {i['kex']} (quantum-vulnerable)")
+           + ": traffic recorded today could be decrypted later" for i in hndl]
+    reg += [f"{i['name']}: key exchange not observed; exposure unknown" for i in unk if not i.get("hndl_inferred")]
     reg += [f"{i['name']}: key exchange {i['kex']} (quantum-resistant)" for i in ifaces
             if i["kex_vulnerable"] is False]
     if ifaces:

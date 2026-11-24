@@ -52,7 +52,7 @@ KIT_FLAGS = {
 
 
 # Toolkit release (semantic versioning; see CHANGELOG.md). Keep in sync with the toolkit.lock header.
-TOOLKIT_VERSION = "1.8.2"
+TOOLKIT_VERSION = "1.9.0-rc.1"
 
 
 def run(cmd, timeout=25):
@@ -259,6 +259,27 @@ def _check_mlkem_claim(group, enumeration):
 
 def _is_pqc_group(g):
     return bool(g) and any(h in g.lower() for h in _PQC_HYBRIDS)
+
+
+def _no_tls13_hndl(host_protocol, kex_group, enumeration):
+    """Harvest-now, decrypt-later exposure inferred without a recorded key exchange (1.9.0).
+
+    Only when the host OpenSSL's default handshake, which offers TLS 1.3, negotiated TLS 1.2 or lower (ML-KEM key
+    exchange exists only in TLS 1.3), the enumeration completed, it accepted a classical group, and it did not see
+    TLS 1.3 or an ML-KEM group accepted. Returns the reason, or None."""
+    if kex_group or host_protocol not in ("TLSv1", "TLSv1.1", "TLSv1.2"):
+        return None
+    if not enumeration or enumeration.get("status") != "complete":
+        return None
+    groups = enumeration.get("groups") or {}
+    if (enumeration.get("versions") or {}).get("TLSv1.3") is True or any(
+            ok is True and _is_pqc_group(g) for g, ok in groups.items()):
+        return None
+    classical = [g for g, ok in groups.items() if ok is True and not _is_pqc_group(g)]
+    if not classical:
+        return None
+    return (f"negotiated {host_protocol} with a client offering TLS 1.3, so no ML-KEM key exchange is possible "
+            f"(ML-KEM groups are TLS 1.3 only); accepts {', '.join(classical)}")
 
 
 def _container_s_client(host, port, image, groups, version=False):
@@ -500,6 +521,15 @@ _ENUM_PQ_ONLY = "MLKEM1024:MLKEM768:MLKEM512"
 # recorded only as "answered but refused every handshake" (1.7.0)
 _ENUM_LEGACY_CURVES = ("secp224r1", "secp224k1", "secp256k1", "secp192r1", "secp192k1", "secp160r1", "secp160k1",
                        "secp160r2", "sect163r1", "sect193r1", "sect193r2", "sect239k1")
+# Cipher-suite families the ruleset judges that an OpenSSL build may not implement (3.x drops export; distro builds
+# often drop 3DES, RC4, DES, IDEA, SEED). The script asks the client binary which of these it can offer; a family
+# it cannot offer is never tested against the server, and the CBOM says so (fedlin:enumerationNotTested, 1.9.0).
+# OpenSSL cipher-string keyword -> name used in the CBOM and report.
+_ENUM_SUITE_FAMILIES = (("3DES", "3DES"), ("RC4", "RC4"), ("DES", "DES"), ("eNULL", "NULL"), ("IDEA", "IDEA"),
+                        ("SEED", "SEED"), ("EXP", "EXPORT"))
+# Protocol versions below TLS 1.0 are never probed (OpenSSL 3.x clients normally cannot offer them), so they are
+# always listed with the suite families the client cannot offer (1.9.0).
+_ENUM_NEVER_PROBED = ("SSLv3", "SSLv2")
 _ENUM_MAX_SUITES = 40  # per protocol version; a server accepting more is recorded as truncated
 _LEGACY = "'ALL:COMPLEMENTOFALL:@SECLEVEL=0'"
 # Alerts the server sends when it refuses what was offered. Received alerts print "SSL alert number N";
@@ -522,6 +552,8 @@ def _enum_script(binary, hp, sni, pace=0.0):
             f"\"^(subject=|issuer=|notBefore=|notAfter=|sha256 Fingerprint=|SHA256 Fingerprint=)|"
             f"Public Key Algorithm:|Public-Key:|Signature Algorithm:\" | head -12")
     L = [f'echo "TOOL $({binary} version)"',
+         'for f in ' + " ".join(k for k, _ in _ENUM_SUITE_FAMILIES) + f'; do {binary} ciphers "$f:@SECLEVEL=0" '
+         '>/dev/null 2>&1 || echo "NOSUITE $f"; done',
          f'echo "=== DEFAULT"; echo | {o} 2>&1 | {keep}',
          f'echo "=== LEGACY"; echo | {o} -cipher {_LEGACY} 2>&1 | {keep}']
     for name, flag in _ENUM_VERSIONS:
@@ -578,11 +610,15 @@ def _parse_enum(out):
             sections[cur] = []
         elif line.startswith("TOOL "):
             sections["TOOL"] = [line[5:].strip()]
+        elif line.startswith("NOSUITE "):
+            sections.setdefault("NOSUITE", []).append(line[8:].strip())
         elif cur:
             sections[cur].append(line)
     text = lambda k: "\n".join(sections.get(k, []))  # noqa: E731
     res = {"tool": (sections.get("TOOL") or ["openssl"])[0], "versions": {}, "suites": {}, "groups": {},
            "dh_bits": [], "certs": [], "truncated": [], "incomplete": [], "cert_probes": {}}
+    lacks = set(sections.get("NOSUITE", []))
+    res["not_tested"] = [name for key, name in _ENUM_SUITE_FAMILIES if key in lacks] + list(_ENUM_NEVER_PROBED)
     for key in ("default", "legacy"):
         t = text(key.upper())
         proto, cipher = _parse_session(t)
@@ -776,6 +812,7 @@ def capture_cert(host, port=443):
                 f"-showcerts 2>/dev/null | {_HS_CUT} | grep -c '^-----BEGIN CERTIFICATE-----$'")
     tls_protocol, tls_cipher = _parse_session(
         run(f"echo | timeout 8 openssl s_client -connect {hp} -servername {h} 2>&1"))
+    host_protocol = tls_protocol  # the host's default handshake offers TLS 1.3; later fallbacks may not
     kex_group, kex_probe_via, kex_complete = _probe_kex_group(host, port)
     kex_partial = None
     if kex_group and not kex_complete and not _is_pqc_group(kex_group):
@@ -805,6 +842,7 @@ def capture_cert(host, port=443):
         # e.g. a server that requests a client certificate: the classical probe saw its session parameters
         tls_protocol, tls_cipher = tls_protocol or classical_only.get("protocol"), classical_only.get("cipher")
     kex_group, kex_note = _check_mlkem_claim(kex_group, enumeration)
+    hndl_inferred = _no_tls13_hndl(host_protocol, kex_group, enumeration)
     return {
         "host": host if port == 443 else f"{host}:{port}",
         "subject": grab(r"subject=(.*)", meta),
@@ -821,6 +859,7 @@ def capture_cert(host, port=443):
         "tls_cipher": tls_cipher,
         "kex_probe_via": kex_probe_via,
         "kex_partial": kex_partial,
+        "hndl_inferred": hndl_inferred,
         "kex_note": kex_note,
         "classical_only": classical_only,
         "enumeration": enumeration,
@@ -848,8 +887,9 @@ def _capture_via_enumeration(host, port):
     en = enumerate_endpoint(host, port)
     if en and en.get("status") != "complete" and en.get("server_answered"):
         hp_ = host if port == 443 else f"{host}:{port}"
+        lacks = ", ".join(en.get("not_tested") or []) or "none reported"
         return {"host": hp_, "no_handshake": "the server answered but refused every handshake from the scan clients; "
-                                              "it may offer only suites they do not implement (3DES, RC4, export)"}
+                                              f"it may offer only what they cannot (not offered by the client: {lacks})"}
     if not en or en.get("status") != "complete" or not en.get("certs"):
         return None
     certs = en["certs"]
@@ -1238,7 +1278,7 @@ class CBOM:
         self.dependencies.append({"ref": ref, "dependsOn": deps})
 
     def add_tls_kex(self, host, kex_group=None, protocol=None, cipher=None, kex_partial=None,
-                    classical_only=None, enumeration=None, kex_note=None):
+                    classical_only=None, enumeration=None, kex_note=None, hndl_inferred=None):
         """Add one TLS interface per endpoint: negotiated version, cipher suite, key exchange.
 
         Shaped for the PKI Consortium CBOM interface profiles: the asset is a 'service' interface
@@ -1298,6 +1338,9 @@ class CBOM:
         props.append({"name": P + "disclosure:implementationPurl", "value": "unknown"})
         if kex_partial:
             props.append({"name": "fedlin:kex_partial_evidence", "value": kex_partial})
+        if hndl_inferred:
+            # no key exchange recorded, but the evidence rules ML-KEM out (see _no_tls13_hndl)
+            props.append({"name": "fedlin:hndlInferred", "value": hndl_inferred})
         if kex_note:
             props.append({"name": "fedlin:kexConflict", "value": kex_note})
         en = enumeration or {}
@@ -1306,6 +1349,10 @@ class CBOM:
             props.append({"name": "fedlin:enumeration", "value": en["status"]})
             if en.get("status") == "complete":
                 props.append({"name": "fedlin:enumerationTool", "value": f"{en.get('client')}: {en.get('tool')}"})
+                if en.get("not_tested"):
+                    # "complete" means every test this client can make was made; these suite families it cannot
+                    # offer, so their acceptance is unknown (never read as refused)
+                    props.append({"name": "fedlin:enumerationNotTested", "value": ",".join(en["not_tested"])})
                 vers = [v for v, ok in (en.get("versions") or {}).items() if ok is True]
                 props.append({"name": "fedlin:acceptedProtocolVersions", "value": ",".join(vers) or "none"})
                 silent = [v for v, ok in (en.get("versions") or {}).items() if ok is None]
@@ -2136,7 +2183,8 @@ def main():
     for c in certs:
         b.add_certificate(c)
         b.add_tls_kex(c["host"], c.get("kex_group"), c.get("tls_protocol"), c.get("tls_cipher"),
-                      c.get("kex_partial"), c.get("classical_only"), c.get("enumeration"), c.get("kex_note"))
+                      c.get("kex_partial"), c.get("classical_only"), c.get("enumeration"), c.get("kex_note"),
+                      c.get("hndl_inferred"))
         for x in _extra_certificates(c):
             b.add_certificate(x, extra=x["requested"])
     if certs:

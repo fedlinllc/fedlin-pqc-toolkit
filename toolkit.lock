@@ -1,4 +1,4 @@
-# fedlin-pqc-toolkit: pinned versions (v1.8.2)
+# fedlin-pqc-toolkit: pinned versions (v1.9.0-rc.1)
 # Reproducibility manifest. Update deliberately; the OCI image + setup.sh should match these.
 # Format: component = version/ref (source)
 
@@ -43,9 +43,9 @@ sonar-cryptography = external  # CBOMkit-hyperion scanner (Java/Python/Go source
 # NIST CMVP validated-modules pages, curated families only (scripts/cmvp.py). Refreshed deliberately at
 # release time with `python3 scripts/cmvp.py snapshot --out data/cmvp/cmvp-YYYY-MM-DD.json`; never fetched
 # during a scan.
-file            = data/cmvp/cmvp-2026-11-19.json
-sha256          = f939d0df923858f18a62c9c1234f09106b43dc290e2954a7385c9769d01fa91e
-certificates    = 40 of 760 listed
+file            = data/cmvp/cmvp-2026-11-24.json
+sha256          = 561cc987cd12d52365357297e2ae28cacad6409b1cc0f0c604c81ba8434f7273
+certificates    = 42 of 768 listed
 
 [pkic-pqcmm]
 # PKI Consortium PQC Maturity Model, github.com/pkic/pqcmm tag v1.0.1 (commit 5ad816e), MIT.

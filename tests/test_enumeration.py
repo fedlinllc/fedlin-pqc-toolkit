@@ -28,6 +28,7 @@ CERT = ("subject=CN=example.com\nissuer=CN=Test CA\nnotBefore=Jan  1 00:00:00 20
 
 OUT = "\n".join([
     "TOOL OpenSSL 3.5.9 test",
+    "NOSUITE 3DES", "NOSUITE RC4", "NOSUITE EXP",  # suite families this client cannot offer (1.9.0)
     "=== DEFAULT", OK13,
     "=== LEGACY", STATIC_RSA,
     "=== VERSION TLSv1", VERSION_REFUSED,
@@ -85,6 +86,7 @@ class Parse(unittest.TestCase):
         sc = tp._enum_script("openssl", hp, h)
         self.assertIn("-servername example.com", sc)
         self.assertNotIn("$(id)", sc)
+        self.assertIn('ciphers "$f:@SECLEVEL=0"', sc)  # asks its own client which suite families it can offer
 
     def test_pace(self):
         hp, h = tp._hp("example.com", 443)
@@ -129,6 +131,9 @@ class Downstream(unittest.TestCase):
         self.assertEqual(p["fedlin:untestedGroups"], "secp521r1,MLKEM1024,ffdhe2048")
         self.assertEqual(p["fedlin:enumerationIncomplete"], "TLSv1.2")
         self.assertEqual(p["fedlin:dhGroupBits"], "1024")
+        # "complete" is relative to the client: the families it cannot offer are named, never read as refused
+        self.assertEqual(p["fedlin:enumeration"], "complete")
+        self.assertEqual(p["fedlin:enumerationNotTested"], "3DES,RC4,EXPORT,SSLv3,SSLv2")
         self.assertTrue(any(c["name"] == "svc.example.com (RSA certificate)" for c in self.bom["components"]))
 
     def test_policy_findings_and_recheck(self):
@@ -148,6 +153,7 @@ class Downstream(unittest.TestCase):
         self.assertIn("TLSv1.2, TLSv1.3 (not tested: TLSv1.1)", md)
         self.assertIn("Diffie-Hellman group of 1024 bits** (Critical)", md)
         self.assertIn("1 static-RSA cipher suite(s)", md)
+        self.assertIn("families the enumeration client cannot offer (3DES, EXPORT, RC4, SSLv2, SSLv3)", md)
         self.assertEqual(summary["configuration"]["endpoints_accepting_broken"], 1)
 
     def test_score_ignores_configuration(self):
